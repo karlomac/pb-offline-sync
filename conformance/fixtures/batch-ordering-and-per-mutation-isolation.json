@@ -1,0 +1,44 @@
+{
+  "name": "batch-ordering-and-per-mutation-isolation",
+  "description": "Mutations run in array order; a rejected mutation does not roll back an earlier one and does not stop a later mutation for a different record.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "a", "body": "b" } },
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0002", "op": "update", "baseRev": 1, "fields": { "title": "x" } },
+        { "id": "m3", "collection": "notes", "recordId": "notesrecord0003", "op": "create", "fields": { "title": "c", "body": "d" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m1", "status": "ok", "rev": 1 },
+        { "id": "m2", "status": "rejected", "code": "not_found" },
+        { "id": "m3", "status": "ok", "rev": 1 }
+      ] }
+    },
+    {
+      "as": "alice",
+      "pull": {},
+      "expect": {
+        "changes": [
+          { "collection": "notes", "recordId": "notesrecord0001", "op": "upsert", "rev": 1 },
+          { "collection": "notes", "recordId": "notesrecord0003", "op": "upsert", "rev": 1 }
+        ]
+      }
+    }
+  ]
+}

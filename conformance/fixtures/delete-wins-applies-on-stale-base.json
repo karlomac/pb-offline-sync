@@ -1,0 +1,42 @@
+{
+  "name": "delete-wins-applies-on-stale-base",
+  "description": "Under deleteWins, a delete with a stale baseRev is applied.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "t", "body": "b" } }
+      ] },
+      "expect": { "results": [ { "id": "m1", "status": "ok", "rev": 1 } ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 1, "fields": { "title": "t2" } }
+      ] },
+      "expect": { "results": [ { "id": "m2", "status": "ok", "rev": 2 } ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m3", "collection": "notes", "recordId": "notesrecord0001", "op": "delete", "baseRev": 1 }
+      ] },
+      "expect": { "results": [ { "id": "m3", "status": "ok" } ] }
+    }
+  ]
+}

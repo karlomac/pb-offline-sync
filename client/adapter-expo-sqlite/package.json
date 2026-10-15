@@ -1,0 +1,30 @@
+{
+  "name": "@pb-offline-sync/adapter-expo-sqlite",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SQLite StorageAdapter + PocketBase schema/type mapping for pb-offline-sync.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@pb-offline-sync/core": "file:../core"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "peerDependencies": {
+    "expo-sqlite": "*"
+  },
+  "peerDependenciesMeta": {
+    "expo-sqlite": {
+      "optional": true
+    }
+  }
+}

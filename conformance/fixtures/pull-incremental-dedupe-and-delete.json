@@ -1,0 +1,68 @@
+{
+  "name": "pull-incremental-dedupe-and-delete",
+  "description": "Incremental pull dedupes multiple writes to one record to its latest state and delivers deletions.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "one", "body": "b" } },
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0002", "op": "create", "fields": { "title": "two", "body": "b" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m1", "status": "ok", "rev": 1 },
+        { "id": "m2", "status": "ok", "rev": 1 }
+      ] }
+    },
+    {
+      "as": "alice",
+      "pull": {},
+      "expect": {
+        "changes": [
+          { "collection": "notes", "recordId": "notesrecord0001", "op": "upsert", "rev": 1 },
+          { "collection": "notes", "recordId": "notesrecord0002", "op": "upsert", "rev": 1 }
+        ],
+        "hasMore": false
+      }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m3", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 1, "fields": { "title": "one-b" } },
+        { "id": "m4", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 2, "fields": { "body": "b2" } },
+        { "id": "m5", "collection": "notes", "recordId": "notesrecord0002", "op": "delete", "baseRev": 1 }
+      ] },
+      "expect": { "results": [
+        { "id": "m3", "status": "ok", "rev": 2 },
+        { "id": "m4", "status": "ok", "rev": 3 },
+        { "id": "m5", "status": "ok" }
+      ] }
+    },
+    {
+      "as": "alice",
+      "pull": { "cursor": "$prev" },
+      "expect": {
+        "mode": "incremental",
+        "changes": [
+          { "collection": "notes", "recordId": "notesrecord0001", "op": "upsert", "rev": 3 },
+          { "collection": "notes", "recordId": "notesrecord0002", "op": "delete", "rev": 2 }
+        ],
+        "hasMore": false
+      }
+    }
+  ]
+}

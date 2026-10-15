@@ -1,0 +1,32 @@
+{
+  "name": "dependency-failed-same-record",
+  "description": "When an earlier mutation for a record fails, a later mutation for the same record in the same request is rejected with dependency_failed.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 1, "fields": { "title": "x" } },
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0001", "op": "delete", "baseRev": 1 }
+      ] },
+      "expect": { "results": [
+        { "id": "m1", "status": "rejected", "code": "not_found" },
+        { "id": "m2", "status": "rejected", "code": "dependency_failed" }
+      ] }
+    }
+  ]
+}

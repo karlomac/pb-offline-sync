@@ -1,0 +1,37 @@
+{
+  "name": "create-exists-owned-by-same-user",
+  "description": "Creating a record whose ID already exists and is owned by the same user returns conflict/exists with the current record.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "first", "body": "hello" } }
+      ] },
+      "expect": { "results": [ { "id": "m1", "status": "ok", "rev": 1 } ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "second", "body": "hello" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m2", "status": "conflict", "code": "exists", "rev": 1, "record": { "id": "notesrecord0001", "title": "first" } }
+      ] }
+    }
+  ]
+}

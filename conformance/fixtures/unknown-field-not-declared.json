@@ -1,0 +1,37 @@
+{
+  "name": "unknown-field-not-declared",
+  "description": "An update supplying a field not declared on the collection is rejected with unknown_field.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "t", "body": "b" } }
+      ] },
+      "expect": { "results": [ { "id": "m1", "status": "ok", "rev": 1 } ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 1, "fields": { "notacolumn": "x" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m2", "status": "rejected", "code": "unknown_field" }
+      ] }
+    }
+  ]
+}

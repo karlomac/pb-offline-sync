@@ -1,0 +1,30 @@
+{
+  "name": "delete-missing-record-ok",
+  "description": "Deleting a record that does not exist is idempotent and returns ok.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "delete", "baseRev": 1 }
+      ] },
+      "expect": { "results": [
+        { "id": "m1", "status": "ok" }
+      ] }
+    }
+  ]
+}

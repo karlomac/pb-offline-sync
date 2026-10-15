@@ -1,0 +1,37 @@
+{
+  "name": "file-field-unsupported",
+  "description": "An update supplying a file field is rejected with file_field_unsupported (no file sync in v1).",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "t", "body": "b" } }
+      ] },
+      "expect": { "results": [ { "id": "m1", "status": "ok", "rev": 1 } ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 1, "fields": { "attachments": "photo.png" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m2", "status": "rejected", "code": "file_field_unsupported" }
+      ] }
+    }
+  ]
+}

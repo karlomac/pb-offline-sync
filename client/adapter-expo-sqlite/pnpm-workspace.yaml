@@ -1,0 +1,7 @@
+# pnpm settings live here (pnpm >= 10 no longer reads the package.json "pnpm" field).
+# esbuild (via vitest) needs its postinstall script to fetch its native binary.
+allowBuilds:
+  esbuild: true
+# `expo-sqlite` is an optional peer; do not pull it in — the binding in expo.ts
+# is a dynamic import and the tests use the in-memory node:sqlite driver.
+autoInstallPeers: false

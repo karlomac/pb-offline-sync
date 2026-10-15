@@ -1,0 +1,65 @@
+{
+  "name": "pull-snapshot-paging-hasmore",
+  "description": "Initial snapshot paging returns ascending-order pages and hasMore until the snapshot is exhausted, then incremental.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "one", "body": "b" } },
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0002", "op": "create", "fields": { "title": "two", "body": "b" } },
+        { "id": "m3", "collection": "notes", "recordId": "notesrecord0003", "op": "create", "fields": { "title": "three", "body": "b" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m1", "status": "ok", "rev": 1 },
+        { "id": "m2", "status": "ok", "rev": 1 },
+        { "id": "m3", "status": "ok", "rev": 1 }
+      ] }
+    },
+    {
+      "as": "alice",
+      "pull": { "limit": 2 },
+      "expect": {
+        "mode": "snapshot",
+        "changes": [
+          { "collection": "notes", "recordId": "notesrecord0001", "op": "upsert", "rev": 1 },
+          { "collection": "notes", "recordId": "notesrecord0002", "op": "upsert", "rev": 1 }
+        ],
+        "hasMore": true
+      }
+    },
+    {
+      "as": "alice",
+      "pull": { "cursor": "$prev", "limit": 2 },
+      "expect": {
+        "changes": [
+          { "collection": "notes", "recordId": "notesrecord0003", "op": "upsert", "rev": 1 }
+        ],
+        "hasMore": false
+      }
+    },
+    {
+      "as": "alice",
+      "pull": { "cursor": "$prev" },
+      "expect": {
+        "mode": "incremental",
+        "changes": [],
+        "hasMore": false
+      }
+    }
+  ]
+}

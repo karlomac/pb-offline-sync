@@ -1,0 +1,44 @@
+{
+  "name": "update-after-delete-conflict-deleted",
+  "description": "An update to a record the change log shows deleted returns conflict/deleted.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "t", "body": "b" } }
+      ] },
+      "expect": { "results": [ { "id": "m1", "status": "ok", "rev": 1 } ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0001", "op": "delete", "baseRev": 1 }
+      ] },
+      "expect": { "results": [ { "id": "m2", "status": "ok" } ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m3", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 1, "fields": { "title": "t3" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m3", "status": "conflict", "code": "deleted" }
+      ] }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+# OS / editor
+.DS_Store
+*.swp
+
+# Go
+/server/**/pb_data/
+*.test
+
+# Node
+node_modules/
+dist/
+*.log
+
+# Local agent scratch
+.orca/

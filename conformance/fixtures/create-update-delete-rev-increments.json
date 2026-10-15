@@ -1,0 +1,57 @@
+{
+  "name": "create-update-delete-rev-increments",
+  "description": "Create then two updates increment rev 1,2,3; a delete then applies.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "first", "body": "hello" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m1", "status": "ok", "rev": 1, "record": { "id": "notesrecord0001", "title": "first", "body": "hello" } }
+      ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 1, "fields": { "title": "second" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m2", "status": "ok", "rev": 2, "merged": false, "record": { "id": "notesrecord0001", "title": "second" } }
+      ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m3", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 2, "fields": { "body": "world" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m3", "status": "ok", "rev": 3, "merged": false, "record": { "id": "notesrecord0001", "body": "world" } }
+      ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m4", "collection": "notes", "recordId": "notesrecord0001", "op": "delete", "baseRev": 3 }
+      ] },
+      "expect": { "results": [
+        { "id": "m4", "status": "ok" }
+      ] }
+    }
+  ]
+}

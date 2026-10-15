@@ -1,0 +1,37 @@
+{
+  "name": "create-id-unavailable-other-user",
+  "description": "Creating a record with an ID owned by another user is rejected with id_unavailable, indistinguishable from a deleted ID.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice", "bob"],
+  "steps": [
+    {
+      "as": "bob",
+      "push": { "mutations": [
+        { "id": "b1", "collection": "notes", "recordId": "notesrecord0002", "op": "create", "fields": { "title": "bob's note", "body": "b" } }
+      ] },
+      "expect": { "results": [ { "id": "b1", "status": "ok", "rev": 1 } ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0002", "op": "create", "fields": { "title": "alice's note", "body": "a" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m1", "status": "rejected", "code": "id_unavailable" }
+      ] }
+    }
+  ]
+}

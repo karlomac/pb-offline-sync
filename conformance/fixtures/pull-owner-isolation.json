@@ -1,0 +1,53 @@
+{
+  "name": "pull-owner-isolation",
+  "description": "A pull only ever returns records owned by the authenticated user; alice never sees bob's records.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice", "bob"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "a1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "alice's note", "body": "a" } }
+      ] },
+      "expect": { "results": [ { "id": "a1", "status": "ok", "rev": 1 } ] }
+    },
+    {
+      "as": "bob",
+      "push": { "mutations": [
+        { "id": "b1", "collection": "notes", "recordId": "notesrecord0002", "op": "create", "fields": { "title": "bob's note", "body": "b" } }
+      ] },
+      "expect": { "results": [ { "id": "b1", "status": "ok", "rev": 1 } ] }
+    },
+    {
+      "as": "alice",
+      "pull": {},
+      "expect": {
+        "changes": [
+          { "collection": "notes", "recordId": "notesrecord0001", "op": "upsert", "rev": 1 }
+        ]
+      }
+    },
+    {
+      "as": "bob",
+      "pull": {},
+      "expect": {
+        "changes": [
+          { "collection": "notes", "recordId": "notesrecord0002", "op": "upsert", "rev": 1 }
+        ]
+      }
+    }
+  ]
+}

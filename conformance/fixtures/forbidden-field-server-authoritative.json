@@ -1,0 +1,37 @@
+{
+  "name": "forbidden-field-server-authoritative",
+  "description": "An update supplying a server-authoritative field is rejected with forbidden_field.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "t", "body": "b" } }
+      ] },
+      "expect": { "results": [ { "id": "m1", "status": "ok", "rev": 1 } ] }
+    },
+    {
+      "as": "alice",
+      "push": { "mutations": [
+        { "id": "m2", "collection": "notes", "recordId": "notesrecord0001", "op": "update", "baseRev": 1, "fields": { "created": "2026-10-15 08:30:00.000Z" } }
+      ] },
+      "expect": { "results": [
+        { "id": "m2", "status": "rejected", "code": "forbidden_field" }
+      ] }
+    }
+  ]
+}

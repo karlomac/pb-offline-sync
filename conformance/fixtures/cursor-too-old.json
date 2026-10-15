@@ -1,0 +1,26 @@
+{
+  "name": "cursor-too-old",
+  "description": "A decodable but stale/ahead-of-head cursor returns 410 cursor_too_old. The runner supplies the stale cursor via the $stale sentinel (cursors are opaque, protocol §7.4).",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "pull": { "cursor": "$stale" },
+      "expect": { "status": 410, "code": "cursor_too_old" }
+    }
+  ]
+}

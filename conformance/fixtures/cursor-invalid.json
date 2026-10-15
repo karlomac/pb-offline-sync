@@ -1,0 +1,26 @@
+{
+  "name": "cursor-invalid",
+  "description": "A malformed cursor returns 400 cursor_invalid.",
+  "config": {
+    "collections": {
+      "notes": {
+        "ownerField": "owner",
+        "conflictPolicy": "serverWins",
+        "deletePolicy": "deleteWins",
+        "fields": [
+          { "name": "title", "type": "text", "writable": true },
+          { "name": "body", "type": "editor", "writable": true },
+          { "name": "attachments", "type": "file", "writable": false }
+        ]
+      }
+    }
+  },
+  "users": ["alice"],
+  "steps": [
+    {
+      "as": "alice",
+      "pull": { "cursor": "not a cursor!" },
+      "expect": { "status": 400, "code": "cursor_invalid" }
+    }
+  ]
+}
