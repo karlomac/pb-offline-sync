@@ -10,6 +10,11 @@ changes.
 
 ### Added
 
+- Deployable **default PocketBase build**: `server/cmd/pocketbase-sync` (stock
+  PocketBase + the sync plugin, configured by `SYNC_*` environment variables)
+  with a root `Dockerfile` and `docker-compose.yml` for Dokploy — mount a volume
+  at `/pb/pb_data`, expose 8090, set `SYNC_COLLECTIONS`.
+
 - Validation pass over the full scenario catalog (`docs/test-scenarios.md`): a
   Go **fixture-execution driver** that runs all 24 conformance fixtures against a
   live server, a `clientWins` convergence scenario, and the client
