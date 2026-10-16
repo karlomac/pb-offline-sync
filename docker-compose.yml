@@ -1,0 +1,26 @@
+# Local / Dokploy (Compose) deployment of the default pb-offline-sync build.
+#
+#   docker compose up -d --build
+#
+# List the synced collections in SYNC_COLLECTIONS. Each must already exist in
+# PocketBase and have the owner field as a relation to an auth collection.
+services:
+  pocketbase:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pb-offline-sync/pocketbase:latest
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      SYNC_COLLECTIONS: notes
+      # SYNC_OWNER_FIELD: owner
+      # SYNC_CONFLICT: serverWins        # serverWins | clientWins | reject
+      # SYNC_DELETE_POLICY: deleteWins   # deleteWins | editWins
+      # SYNC_PRUNE_CRON: "0 3 * * *"
+    volumes:
+      - pb-data:/pb/pb_data
+
+volumes:
+  pb-data:

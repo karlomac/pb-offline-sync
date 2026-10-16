@@ -76,6 +76,9 @@ docs/protocol.md          the frozen v1.0 wire contract (source of truth)
 docs/test-scenarios.md    scenario catalog for both sides + coverage gaps
 conformance/              language-neutral JSON fixtures both sides must pass
 server/                   Go module: the PocketBase plugin (package syncplugin)
+server/cmd/pocketbase-sync/   the default PocketBase build (env-configured)
+Dockerfile                production image for the bundled build
+docker-compose.yml        local / Dokploy Compose deployment
 client/core/              TypeScript sync engine (no platform dependencies)
 client/transport-pocketbase/  HTTP transport (auth + realtime nudge)
 client/adapter-expo-sqlite/   first storage adapter + schema/type mapping
@@ -84,13 +87,53 @@ examples/expo-notes/      example app (roadmap)
 
 ---
 
-## Part 1 — Server: build the PocketBase plugin
+## Part 1 — Server: the PocketBase build
 
-The server is a **library** you register into a PocketBase app, not a standalone
-binary. You write a tiny `main.go`, add the plugin, and build your own PocketBase
-binary.
+The server is PocketBase with the sync plugin compiled in. This repo ships that
+app at `server/cmd/pocketbase-sync`, configured entirely by environment
+variables, so **one binary and one image serve every app** — it is the default
+PocketBase build.
 
-### 1. Create your server app
+### Option A — use the bundled build (recommended)
+
+Build it directly, or let Dokploy build the shipped `Dockerfile` (see Part 3):
+
+```bash
+cd server
+go build -o pb ./cmd/pocketbase-sync
+
+# no collections listed => plain PocketBase (plugin off)
+./pb serve --http=0.0.0.0:8090
+
+# enable sync for one or more collections (they must already exist)
+SYNC_COLLECTIONS=notes ./pb serve --http=0.0.0.0:8090
+
+# create the first superuser, then open http://localhost:8090/_/
+./pb superuser upsert you@example.com 'a-strong-password'
+```
+
+Every collection in `SYNC_COLLECTIONS` must already exist and have the owner
+field as a relation to an auth collection, or the server **refuses to start**
+(config is validated at boot). Configuration:
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `SYNC_COLLECTIONS` | *(empty)* | comma-separated collections to sync; empty keeps the plugin off |
+| `SYNC_OWNER_FIELD` | `owner` | the owner relation field |
+| `SYNC_CONFLICT` | `serverWins` | `serverWins` \| `clientWins` \| `reject` |
+| `SYNC_DELETE_POLICY` | `deleteWins` | `deleteWins` \| `editWins` |
+| `SYNC_MAX_BATCH` | `100` | max mutations per push |
+| `SYNC_MAX_PAGE` | `500` | max changes per pull page |
+| `SYNC_DEFAULT_PAGE` | `200` | pull page size when the client omits one |
+| `SYNC_MAX_BODY_BYTES` | `1048576` | max push body size |
+| `SYNC_IDEMPOTENCY_RETENTION_DAYS` | `14` | idempotency-record retention |
+| `SYNC_CHANGELOG_RETENTION_DAYS` | `30` | change-log retention (server-side) |
+| `SYNC_PRUNE_CRON` | `0 3 * * *` | cron for retention pruning; empty disables |
+
+### Option B — embed the plugin in your own PocketBase app
+
+Use this if you already have a PocketBase app, or want to configure it in code
+rather than by environment.
 
 ```bash
 mkdir pb-sync-server && cd pb-sync-server
@@ -113,7 +156,7 @@ require (
 replace github.com/pb-offline-sync/server => ../pb-offline-sync/server
 ```
 
-### 2. Wire the plugin in `main.go`
+#### `main.go`
 
 ```go
 package main
@@ -123,7 +166,6 @@ import (
 	"time"
 
 	"github.com/pocketbase/pocketbase"
-	_ "github.com/pocketbase/pocketbase/migrations" // core system migrations
 
 	"github.com/pb-offline-sync/server/syncplugin"
 )
@@ -162,7 +204,7 @@ or its owner field is absent or is not a relation to an auth collection. It also
 registers the plugin's migrations, which run automatically on first boot and
 create the `sync_*` tables.
 
-### 3. Build and run
+#### Build and run
 
 ```bash
 go mod tidy
@@ -248,46 +290,35 @@ container and handles domains, TLS and volumes. Deploy this as a normal Docker
 application. (Menu labels vary slightly by Dokploy version — consult the Dokploy
 docs if a step differs.)
 
-### 1. Add a `Dockerfile` to your server app
+### 1. Use the shipped `Dockerfile`
 
-Multi-stage build of your PocketBase binary. Put this next to your `main.go`:
+This repo already contains a production `Dockerfile` at the root. It builds
+`server/cmd/pocketbase-sync`, runs as a non-root user, and exposes a
+`/api/health` check — there is nothing to write. Point Dokploy at the **repo
+root**.
 
-```dockerfile
-FROM golang:1.27 AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-# if you depend on the local plugin via `replace`, copy it in and fix the path
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/pb .
-
-FROM alpine:3.20
-RUN adduser -D -h /pb pb
-WORKDIR /pb
-COPY --from=build /out/pb /pb/pb
-RUN mkdir -p /pb/pb_data && chown -R pb:pb /pb
-USER pb
-VOLUME ["/pb/pb_data"]
-EXPOSE 8090
-ENTRYPOINT ["/pb/pb"]
-CMD ["serve", "--http=0.0.0.0:8090"]
+```bash
+# optional local sanity check
+docker build -t pb-offline-sync .
+docker run -p 8090:8090 -v pb-data:/pb/pb_data -e SYNC_COLLECTIONS=notes pb-offline-sync
 ```
 
-> If you use the `replace ... => ../pb-offline-sync/server` directive, the build
-> context must include that directory (e.g. vendor it, or use a monorepo/multi-stage
-> `COPY` that places the plugin at the replaced path). Publishing the module does
-> not exist yet, so the `replace` is the supported path.
+> Building your **own** PocketBase app instead (Option B in Part 1)? Then the
+> plugin is pulled in via a `replace`, and the build context must contain the
+> plugin at the replaced path — this repo's root `Dockerfile` already does that
+> for the bundled command, so it is only relevant if you fork the app.
 
 ### 2. Create the Dokploy application
 
-1. **Push** the server app to a Git repo Dokploy can reach.
-2. In Dokploy, **Create → Application**, connect the repo, branch, and build path.
-3. **Build type:** `Dockerfile` (Dokploy builds it and runs the container).
-4. **Ports:** map container port **8090** (PocketBase's HTTP port).
-5. **Volumes (important):** add a persistent volume, e.g. name `pb-data`, mounted
-   at **`/pb/pb_data`**. Without this, your database and uploads are lost on
-   redeploy.
-6. **Domains:** add your domain and let Dokploy provision TLS. Point the client's
+1. **Create → Application** and connect this repo; leave the **build path** at the
+   repo root.
+2. **Build type:** `Dockerfile` (the root `Dockerfile`).
+3. **Environment:** set `SYNC_COLLECTIONS` to your collection names, e.g.
+   `notes,projects`. The other `SYNC_*` variables are optional (Part 1 table).
+4. **Ports:** container port **8090**.
+5. **Volumes (important):** add a persistent volume mounted at **`/pb/pb_data`**.
+   Without it, your database and uploads are lost on redeploy.
+6. **Domains:** add your domain and let Dokploy provision TLS; point the client's
    `baseUrl` at `https://your-domain`.
 
 ### 3. First boot
@@ -306,20 +337,11 @@ synced collection(s) from Part 2. Health probe: `GET /api/health`.
 
 ### Docker Compose alternative
 
-Dokploy also runs a Compose stack if you prefer:
+A ready `docker-compose.yml` is included at the repo root — set
+`SYNC_COLLECTIONS` there and run:
 
-```yaml
-services:
-  pb:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "8090:8090"
-    volumes:
-      - pb-data:/pb/pb_data
-
-volumes:
-  pb-data:
+```bash
+docker compose up -d --build
 ```
 
 ---

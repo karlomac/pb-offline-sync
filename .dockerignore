@@ -1,0 +1,13 @@
+# Only server/ is needed to build the image; keep the context small.
+.git
+.github
+.gitignore
+**/node_modules
+**/dist
+client
+conformance
+docs
+examples
+plans
+**/pb_data
+*.md
