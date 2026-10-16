@@ -335,6 +335,12 @@ schema. Create the first superuser once:
 Then open `https://your-domain/_/` to create the auth collection user(s) and the
 synced collection(s) from Part 2. Health probe: `GET /api/health`.
 
+> **Order matters on a fresh volume.** The plugin validates `SYNC_COLLECTIONS` at
+> boot and refuses to start if a listed collection is missing, so on a brand-new
+> `pb_data` deploy **first with `SYNC_COLLECTIONS` unset** (plain PocketBase),
+> create the collections in `/_/`, then set `SYNC_COLLECTIONS` and redeploy.
+> `/api/sync/*` routes only exist once the plugin is enabled.
+
 ### Docker Compose alternative
 
 A ready `docker-compose.yml` is included at the repo root — set
