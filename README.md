@@ -345,7 +345,11 @@ This build follows the usual PocketBase-on-Dokploy `.env` (template:
 5. **Volumes (important):** bind-mount an absolute host path to
    **`/pb/pb_data`** — use `PB_DATA_PATH`, unique per app (e.g.
    `/etc/dokploy/storage/<app>/pb_data`). Without it, your database and uploads
-   are lost on redeploy.
+   are lost on redeploy. The image starts as root just long enough to `chown`
+   that mount to its `pb` user, then runs the server unprivileged, so a
+   root-owned host directory (the usual Dokploy case) works without a manual
+   `chown`. If your platform forces a non-root user instead, make the host path
+   writable by that user.
 6. **Domains:** add your domain and let Dokploy provision TLS; point the client's
    `baseUrl` at `https://your-domain`.
 

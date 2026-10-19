@@ -34,8 +34,9 @@ RUN cd server \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/pb ./cmd/pocketbase-sync
 
 FROM alpine:3.20
-# ca-certificates for outbound TLS; busybox wget is used by HEALTHCHECK.
-RUN apk add --no-cache ca-certificates \
+# ca-certificates for outbound TLS; busybox wget for HEALTHCHECK; su-exec lets
+# the entrypoint repair a root-owned bind mount, then drop to the `pb` user.
+RUN apk add --no-cache ca-certificates su-exec \
  && adduser -D -h /pb pb \
  && mkdir -p /pb/pb_data \
  && chown -R pb:pb /pb
@@ -43,7 +44,8 @@ WORKDIR /pb
 COPY --from=build /out/pb /pb/pb
 COPY docker-entrypoint.sh /pb/docker-entrypoint.sh
 RUN chmod +x /pb/docker-entrypoint.sh
-USER pb
+# No USER on purpose: the entrypoint starts as root only to fix ownership of a
+# bind-mounted data dir, then execs the server as the unprivileged `pb` user.
 
 # PocketBase data (SQLite DB + uploads) lives here: always mount persistent
 # storage at /pb/pb_data (bind mount on Dokploy) or data is lost on redeploy.

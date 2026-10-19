@@ -67,6 +67,11 @@ changes.
 
 ### Fixed
 
+- Deployment: the entrypoint now repairs ownership of a root-owned bind-mounted
+  data directory before dropping to the unprivileged `pb` user. Fixes the
+  `unable to open database file (14)` crash-loop on Dokploy (bind mounts are
+  created root-owned, but the server previously ran only as `pb`).
+
 - Client: snapshot cleanup no longer deletes previously delivered records when a
   snapshot is resumed from a persisted cursor (only a fresh snapshot cleans up).
 - Client: a `sent` (unacknowledged) create now blocks later same-record edits, so
