@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  server:
+    name: server (Go ${{ matrix.go }}, PocketBase ${{ matrix.pocketbase }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # PocketBase supports the pinned version; widen only after verifying a
+        # range against the upstream changelog (see AGENTS.md).
+        go: ["1.27.x"]
+        pocketbase: ["v0.40.5"]
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: server/go.sum
+      - name: Verify pinned PocketBase matches go.mod
+        # go.mod pins the version; this asserts the matrix agrees with it rather
+        # than silently rewriting the module graph (repo policy: AGENTS.md).
+        run: |
+          go get github.com/pocketbase/pocketbase@${{ matrix.pocketbase }}
+          git diff --exit-code -- go.mod go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  client:
+    name: client (${{ matrix.package }}, Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.x"]
+        package: [core, transport-pocketbase, adapter-expo-sqlite]
+    defaults:
+      run:
+        working-directory: client/${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+          cache-dependency-path: client/${{ matrix.package }}/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm test
+
+  # Compatibility canary: the pinned version above is authoritative. This job
+  # runs the suite against the latest PocketBase to surface upcoming breakage
+  # early; it is informational and must not gate merges.
+  pocketbase-latest:
+    name: compat (PocketBase latest, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: server/go.sum
+      - run: go get github.com/pocketbase/pocketbase@latest
+      - run: go test ./...
