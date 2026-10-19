@@ -12,8 +12,12 @@ changes.
 
 - Deployable **default PocketBase build**: `server/cmd/pocketbase-sync` (stock
   PocketBase + the sync plugin, configured by `SYNC_*` environment variables)
-  with a root `Dockerfile` and `docker-compose.yml` for Dokploy — mount a volume
-  at `/pb/pb_data`, expose 8090, set `SYNC_COLLECTIONS`.
+  with a root `Dockerfile` and `docker-compose.yml` for Dokploy. The image
+  follows the usual PocketBase-on-Dokploy `.env`: `PB_ADMIN_EMAIL` /
+  `PB_ADMIN_PASSWORD` bootstrap the superuser on boot (`docker-entrypoint.sh`),
+  `PB_DATA_PATH` bind-mounts the data dir, and `PB_VERSION` overrides the build
+  (blank keeps the pinned, tested version). `.env.example` added; `.env` is
+  gitignored.
 
 - Validation pass over the full scenario catalog (`docs/test-scenarios.md`): a
   Go **fixture-execution driver** that runs all 24 conformance fixtures against a

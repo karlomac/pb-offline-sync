@@ -78,7 +78,9 @@ conformance/              language-neutral JSON fixtures both sides must pass
 server/                   Go module: the PocketBase plugin (package syncplugin)
 server/cmd/pocketbase-sync/   the default PocketBase build (env-configured)
 Dockerfile                production image for the bundled build
+docker-entrypoint.sh      container entrypoint: admin bootstrap + serve
 docker-compose.yml        local / Dokploy Compose deployment
+.env.example              deployment env template (never commit the real .env)
 client/core/              TypeScript sync engine (no platform dependencies)
 client/transport-pocketbase/  HTTP transport (auth + realtime nudge)
 client/adapter-expo-sqlite/   first storage adapter + schema/type mapping
@@ -129,6 +131,10 @@ field as a relation to an auth collection, or the server **refuses to start**
 | `SYNC_IDEMPOTENCY_RETENTION_DAYS` | `14` | idempotency-record retention |
 | `SYNC_CHANGELOG_RETENTION_DAYS` | `30` | change-log retention (server-side) |
 | `SYNC_PRUNE_CRON` | `0 3 * * *` | cron for retention pruning; empty disables |
+
+The container image's entrypoint also understands `PB_ADMIN_EMAIL` /
+`PB_ADMIN_PASSWORD` (superuser bootstrap), `PB_DATA_DIR` (default
+`/pb/pb_data`) and `PB_HTTP_ADDR` (default `0.0.0.0:8090`).
 
 ### Option B — embed the plugin in your own PocketBase app
 
@@ -300,8 +306,28 @@ root**.
 ```bash
 # optional local sanity check
 docker build -t pb-offline-sync .
-docker run -p 8090:8090 -v pb-data:/pb/pb_data -e SYNC_COLLECTIONS=notes pb-offline-sync
+docker run -p 8090:8090 \
+  -v /etc/dokploy/storage/pb-sync/pb_data:/pb/pb_data \
+  -e PB_ADMIN_EMAIL=you@example.com -e PB_ADMIN_PASSWORD='change-me' \
+  -e SYNC_COLLECTIONS=notes pb-offline-sync
 ```
+
+#### Environment
+
+This build follows the usual PocketBase-on-Dokploy `.env` (template:
+`.env.example`):
+
+| Key | Meaning |
+|---|---|
+| `PB_ADMIN_EMAIL` / `PB_ADMIN_PASSWORD` | superuser created/refreshed idempotently on every boot |
+| `PB_VERSION` | optional build-time PocketBase version. **Blank means the pinned version** (`v0.40.5`), not "latest" — see the note below |
+| `PB_DATA_PATH` | absolute host path bind-mounted to `/pb/pb_data` |
+| `SYNC_COLLECTIONS`, `SYNC_*` | sync plugin config (Part 1) |
+
+> `PB_VERSION` deliberately differs from the upstream "blank = latest" habit.
+> The plugin's change-log/hook behaviour is only verified against the pinned
+> PocketBase version (protocol §17.1.4), so a different version is untested; the
+> build accepts an override but CI only guarantees the pin.
 
 > Building your **own** PocketBase app instead (Option B in Part 1)? Then the
 > plugin is pulled in via a `replace`, and the build context must contain the
@@ -313,23 +339,27 @@ docker run -p 8090:8090 -v pb-data:/pb/pb_data -e SYNC_COLLECTIONS=notes pb-offl
 1. **Create → Application** and connect this repo; leave the **build path** at the
    repo root.
 2. **Build type:** `Dockerfile` (the root `Dockerfile`).
-3. **Environment:** set `SYNC_COLLECTIONS` to your collection names, e.g.
-   `notes,projects`. The other `SYNC_*` variables are optional (Part 1 table).
+3. **Environment:** add the keys from `.env.example` in Dokploy's Environment
+   editor (Dokploy has no `env_file`), or use the Compose stack below.
 4. **Ports:** container port **8090**.
-5. **Volumes (important):** add a persistent volume mounted at **`/pb/pb_data`**.
-   Without it, your database and uploads are lost on redeploy.
+5. **Volumes (important):** bind-mount an absolute host path to
+   **`/pb/pb_data`** — use `PB_DATA_PATH`, unique per app (e.g.
+   `/etc/dokploy/storage/<app>/pb_data`). Without it, your database and uploads
+   are lost on redeploy.
 6. **Domains:** add your domain and let Dokploy provision TLS; point the client's
    `baseUrl` at `https://your-domain`.
 
 ### 3. First boot
 
-On first start the container creates `pb_data/`, runs the plugin migrations
+On first start the container creates the data dir, runs the plugin migrations
 (`sync_meta`, `sync_changes`, `sync_processed`, `sync_conflicts`) and the core
-schema. Create the first superuser once:
+schema, and — because `PB_ADMIN_EMAIL` / `PB_ADMIN_PASSWORD` are set — creates
+the superuser automatically (idempotently, on every boot). To do it manually
+instead:
 
 ```bash
 # from the Dokploy container terminal, or `docker exec -it <container> ...`
-/pb/pb superuser upsert you@example.com 'a-strong-password'
+/pb/pb superuser upsert you@example.com 'a-strong-password' --dir=/pb/pb_data
 ```
 
 Then open `https://your-domain/_/` to create the auth collection user(s) and the

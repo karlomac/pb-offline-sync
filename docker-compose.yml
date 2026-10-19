@@ -1,26 +1,23 @@
 # Local / Dokploy (Compose) deployment of the default pb-offline-sync build.
 #
+#   cp .env.example .env && edit .env
 #   docker compose up -d --build
 #
-# List the synced collections in SYNC_COLLECTIONS. Each must already exist in
-# PocketBase and have the owner field as a relation to an auth collection.
+# On Dokploy, put the same variables in the application's Environment editor.
 services:
   pocketbase:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Empty => the version pinned in server/go.mod.
+        PB_VERSION: ${PB_VERSION:-}
     image: pb-offline-sync/pocketbase:latest
     restart: unless-stopped
     ports:
       - "8090:8090"
-    environment:
-      SYNC_COLLECTIONS: notes
-      # SYNC_OWNER_FIELD: owner
-      # SYNC_CONFLICT: serverWins        # serverWins | clientWins | reject
-      # SYNC_DELETE_POLICY: deleteWins   # deleteWins | editWins
-      # SYNC_PRUNE_CRON: "0 3 * * *"
+    env_file:
+      - .env
     volumes:
-      - pb-data:/pb/pb_data
-
-volumes:
-  pb-data:
+      # Absolute host path, unique per app, so data survives redeploys.
+      - ${PB_DATA_PATH:?PB_DATA_PATH must be set to an absolute host path}:/pb/pb_data

@@ -11,5 +11,10 @@ node_modules/
 dist/
 *.log
 
+# Secrets / local env (keep the template)
+.env
+.env.*
+!.env.example
+
 # Local agent scratch
 .orca/
