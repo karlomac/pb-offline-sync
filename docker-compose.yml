@@ -3,7 +3,8 @@
 #   cp .env.example .env && edit .env
 #   docker compose up -d --build
 #
-# On Dokploy, put the same variables in the application's Environment editor.
+# On Dokploy, put the same variables in the application's Environment editor and
+# map the domain to CONTAINER port 8090 (do not publish a host port).
 services:
   pocketbase:
     build:
@@ -14,10 +15,17 @@ services:
         PB_VERSION: ${PB_VERSION:-}
     image: pb-offline-sync/pocketbase:latest
     restart: unless-stopped
-    ports:
-      - "8090:8090"
     env_file:
       - .env
+    # Dokploy's Traefik reaches the container over the internal network, so the
+    # port is only *exposed*, never published to the host. Publishing it makes a
+    # second deployment fail with:
+    #   Bind for 0.0.0.0:8090 failed: port is already allocated
+    expose:
+      - "8090"
+    # Running outside Dokploy (plain Docker on a host)? Uncomment to publish it:
+    # ports:
+    #   - "${APP_PORT:-8090}:8090"
     volumes:
       # Absolute host path, unique per app, so data survives redeploys.
       - ${PB_DATA_PATH:?PB_DATA_PATH must be set to an absolute host path}:/pb/pb_data

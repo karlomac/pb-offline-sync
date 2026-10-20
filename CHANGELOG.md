@@ -67,6 +67,11 @@ changes.
 
 ### Fixed
 
+- Deployment: the shipped `docker-compose.yml` no longer publishes host port 8090
+  (it uses `expose`, so Dokploy's Traefik reaches the container internally).
+  Publishing it made every second app on the same host fail to start with
+  `Bind for 0.0.0.0:8090 failed: port is already allocated`.
+
 - Deployment: the entrypoint now repairs ownership of a root-owned bind-mounted
   data directory before dropping to the unprivileged `pb` user. Fixes the
   `unable to open database file (14)` crash-loop on Dokploy (bind mounts are

@@ -304,13 +304,16 @@ This repo already contains a production `Dockerfile` at the root. It builds
 root**.
 
 ```bash
-# optional local sanity check
+# optional local sanity check (plain Docker on a host, not Dokploy)
 docker build -t pb-offline-sync .
 docker run -p 8090:8090 \
   -v /etc/dokploy/storage/pb-sync/pb_data:/pb/pb_data \
   -e PB_ADMIN_EMAIL=you@example.com -e PB_ADMIN_PASSWORD='change-me' \
   -e SYNC_COLLECTIONS=notes pb-offline-sync
 ```
+
+On a Dokploy host, **do not** publish `-p 8090:8090` / a compose `ports:` entry —
+Dokploy's Traefik reaches the container over the internal network. See step 4.
 
 #### Environment
 
@@ -341,7 +344,11 @@ This build follows the usual PocketBase-on-Dokploy `.env` (template:
 2. **Build type:** `Dockerfile` (the root `Dockerfile`).
 3. **Environment:** add the keys from `.env.example` in Dokploy's Environment
    editor (Dokploy has no `env_file`), or use the Compose stack below.
-4. **Ports:** container port **8090**.
+4. **Ports / domain:** map the domain to **container port 8090** and leave the
+   host port unpublished — the shipped `docker-compose.yml` uses
+   `expose: ["8090"]`, not `ports:`. Publishing `8090:8090` makes a *second* app
+   on the same host fail with
+   `Bind for 0.0.0.0:8090 failed: port is already allocated`.
 5. **Volumes (important):** bind-mount an absolute host path to
    **`/pb/pb_data`** — use `PB_DATA_PATH`, unique per app (e.g.
    `/etc/dokploy/storage/<app>/pb_data`). Without it, your database and uploads
