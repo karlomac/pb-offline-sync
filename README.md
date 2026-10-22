@@ -27,6 +27,7 @@ background engine reconciles it with PocketBase when connectivity returns.
 - [Part 4 — Bare metal: Linux or Windows](#part-4--bare-metal-linux-or-windows)
 - [Part 5 — Client: use it in a SvelteKit or React project](#part-5--client-use-it-in-a-sveltekit-or-react-project)
 - [Testing](#testing)
+- [Releases](#releases)
 - [Compatibility](#compatibility)
 - [Non-goals](#non-goals)
 - [Roadmap](#roadmap)
@@ -77,6 +78,8 @@ resolved decisions, and `docs/threat-model.md` for the security model.
 docs/protocol.md          the frozen v1.0 wire contract (source of truth)
 docs/test-scenarios.md    scenario catalog for both sides + coverage gaps
 docs/media-sync-plan.md   design proposal for photo/video (media) sync
+docs/release-plan.md      versioning scheme + the tag-driven release pipeline
+.github/workflows/        CI and release automation
 conformance/              language-neutral JSON fixtures both sides must pass
 server/                   Go module: the PocketBase plugin (package syncplugin)
 server/cmd/pb-offline-sync/   the default PocketBase build (env-configured)
@@ -683,6 +686,22 @@ Both sides validate the same `conformance/` fixtures; a green run on both means
 they agree with `docs/protocol.md`. The server also has a randomized
 multi-device convergence harness: `go test ./syncplugin/ -run Convergence -count=5`.
 See `docs/test-scenarios.md` for the full scenario catalog and known gaps.
+
+## Releases
+
+Tag-driven, fully automated — see `docs/release-plan.md`:
+
+```bash
+# move the [Unreleased] section in CHANGELOG.md to:  ## [0.1.0] - 2026-10-22
+git commit -am "Release v0.1.0" && git push
+git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
+```
+
+The release workflow refuses to run without a matching changelog section, re-runs
+the Go suite, then publishes the GHCR image (`ghcr.io/karlomac/pb-offline-sync`),
+cross-compiled binaries with checksums, a GitHub Release, and the `server/vX.Y.Z`
+tag that `go get` requires. Stable tags also move `latest`; prereleases
+(`v0.2.0-rc.1`) do not.
 
 ## Compatibility
 

@@ -11,8 +11,11 @@ import (
 // ProtocolVersion is the wire protocol version this plugin implements (protocol.md §2, §16).
 const ProtocolVersion = 1
 
-// PluginVersion is the plugin's own semver, independent of the protocol version (§16).
-const PluginVersion = "0.1.0"
+// PluginVersion is the plugin's own semver, independent of the protocol version
+// (§16). Release builds override it:
+//
+//	-ldflags "-X github.com/karlomac/pb-offline-sync/server/syncplugin.PluginVersion=0.2.0"
+var PluginVersion = "0.1.0"
 
 // ConflictPolicy selects the server action for overlapping fields on a stale base (§8.3).
 type ConflictPolicy string
