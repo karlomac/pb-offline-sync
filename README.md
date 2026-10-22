@@ -74,6 +74,7 @@ resolved decisions, and `docs/threat-model.md` for the security model.
 ```
 docs/protocol.md          the frozen v1.0 wire contract (source of truth)
 docs/test-scenarios.md    scenario catalog for both sides + coverage gaps
+docs/media-sync-plan.md   design proposal for photo/video (media) sync
 conformance/              language-neutral JSON fixtures both sides must pass
 server/                   Go module: the PocketBase plugin (package syncplugin)
 server/cmd/pocketbase-sync/   the default PocketBase build (env-configured)

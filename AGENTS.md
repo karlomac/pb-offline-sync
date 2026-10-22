@@ -16,6 +16,8 @@ the frozen v1.0 contract and the source of truth; code follows it.
 - `docs/threat-model.md` — security requirements.
 - `docs/test-scenarios.md` — the scenario catalog for both sides, with coverage
   status and the prioritised gaps.
+- `docs/media-sync-plan.md` — **proposal** for photo/video sync (not part of the
+  frozen protocol; a v1.1 spec change is required before implementing).
 
 ## Repository layout
 
