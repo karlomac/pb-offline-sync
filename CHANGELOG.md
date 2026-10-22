@@ -8,8 +8,23 @@ changes.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.1.0-rc.1] - 2026-10-22
+
 ### Added
 
+- **Automated releases** (`docs/release-plan.md`,
+  `.github/workflows/release.yml`): a tag-driven pipeline that validates the tag
+  against this changelog, re-runs the Go suite, publishes the GHCR image,
+  cross-compiled binaries with checksums, the `server/vX.Y.Z` Go module tag, and
+  a GitHub Release with notes taken from this file.
+- **Bare-metal deployment docs** (README Part 4): Linux systemd and Windows/NSSM
+  services, cross-compilation, and the practical differences from the container
+  (no entrypoint `chown`, `PB_ADMIN_*` unused outside it, TLS via a reverse proxy).
+- **Media sync plan** (`docs/media-sync-plan.md`): design proposal for photo/video
+  sync — a separate binary channel, content-hash dedup, resumable chunk uploads,
+  immutable media records referenced by business records, S3-compatible storage.
 - Deployable **default PocketBase build**: `server/cmd/pb-offline-sync` (stock
   PocketBase + the sync plugin, configured by `SYNC_*` environment variables)
   with a root `Dockerfile` and `docker-compose.yml` for Dokploy. The image
@@ -64,6 +79,16 @@ changes.
   targeted proofs that acknowledged writes are not lost, duplicate delivery is
   idempotent, a prune-induced `410` resyncs correctly, and `editWins` preserves
   an edited record.
+
+### Changed
+
+- Renamed to **`pb-offline-sync`**: GitHub repo `karlomac/pb-offline-sync`, Go
+  module `github.com/karlomac/pb-offline-sync/server`, command
+  `server/cmd/pb-offline-sync`, image `ghcr.io/karlomac/pb-offline-sync`. The npm
+  scope stays `@pb-offline-sync/*`; the wire protocol (`X-Sync-Protocol`) and the
+  `sync_*` tables are unchanged.
+- `syncplugin.PluginVersion` is now a variable so release builds stamp the exact
+  version with `-ldflags`; `/api/sync/info` reports it.
 
 ### Fixed
 
