@@ -20,10 +20,11 @@ background engine reconciles it with PocketBase when connectivity returns.
 - [What it does](#what-it-does)
 - [How it works](#how-it-works)
 - [Repository layout](#repository-layout)
-- [Part 1 — Server: build the PocketBase plugin](#part-1--server-build-the-pocketbase-plugin)
+- [Part 1 — Server: the PocketBase build](#part-1--server-the-pocketbase-build)
 - [Part 2 — PocketBase configuration](#part-2--pocketbase-configuration)
 - [Part 3 — Deploying on Dokploy](#part-3--deploying-on-dokploy)
-- [Part 4 — Client: use it in a SvelteKit or React project](#part-4--client-use-it-in-a-sveltekit-or-react-project)
+- [Part 4 — Bare metal: Linux or Windows](#part-4--bare-metal-linux-or-windows)
+- [Part 5 — Client: use it in a SvelteKit or React project](#part-5--client-use-it-in-a-sveltekit-or-react-project)
 - [Testing](#testing)
 - [Compatibility](#compatibility)
 - [Non-goals](#non-goals)
@@ -394,7 +395,121 @@ docker compose up -d --build
 
 ---
 
-## Part 4 — Client: use it in a SvelteKit or React project
+## Part 4 — Bare metal: Linux or Windows
+
+Docker is only packaging. The server is a **single static Go binary**, so you can
+run it directly on a VM, a workstation, or a Raspberry Pi. Nothing in the sync
+layer needs a container.
+
+### Build
+
+```bash
+cd server
+CGO_ENABLED=0 go build -trimpath -o pb ./cmd/pocketbase-sync
+```
+
+Cross-compile elsewhere without a C toolchain (PocketBase's SQLite driver is pure
+Go):
+
+```bash
+# Windows
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o pb.exe ./cmd/pocketbase-sync
+# Linux arm64 (e.g. a Pi)
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o pb ./cmd/pocketbase-sync
+```
+
+### What changes vs Docker
+
+| | Container | Bare metal |
+|---|---|---|
+| Process user | starts root, `chown`s the mount, `su-exec pb` | run as a user that owns the data dir — no `chown` dance |
+| Admin bootstrap | `PB_ADMIN_*` read by `docker-entrypoint.sh` | `PB_ADMIN_*` do **nothing**; run `superuser upsert` once |
+| Env | compose `env_file` / Dokploy editor | systemd `EnvironmentFile` or the shell |
+| TLS | Dokploy/Traefik | Caddy/nginx or a Cloudflare Tunnel — PocketBase does not terminate TLS |
+| Health | Docker `HEALTHCHECK` | same `GET /api/health`, from your monitoring |
+
+The `SYNC_*` variables and the `media`/`pb_data` layout are identical.
+
+### Linux (systemd)
+
+```bash
+sudo useradd --system --home /var/lib/pb-offline-sync pb
+sudo install -d -o pb -g pb /var/lib/pb-offline-sync
+sudo install -o pb -g pb -m 0755 pb /usr/local/bin/pb-offline-sync
+
+# create the superuser once (or use the installer at /_/)
+sudo -u pb SYNC_COLLECTIONS=notes \
+  /usr/local/bin/pb-offline-sync superuser upsert you@example.com 'a-strong-password' \
+  --dir=/var/lib/pb-offline-sync
+```
+
+`/etc/pb-offline-sync.env`:
+
+```dotenv
+SYNC_COLLECTIONS=notes
+SYNC_OWNER_FIELD=owner
+# SYNC_PRUNE_CRON=0 3 * * *
+```
+
+`/etc/systemd/system/pb-offline-sync.service`:
+
+```ini
+[Unit]
+Description=pb-offline-sync (PocketBase + sync plugin)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pb
+Group=pb
+EnvironmentFile=/etc/pb-offline-sync.env
+ExecStart=/usr/local/bin/pb-offline-sync serve --http=127.0.0.1:8090 --dir=/var/lib/pb-offline-sync
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now pb-offline-sync
+curl -s http://127.0.0.1:8090/api/health
+```
+
+Listening on a privileged port? Use `AmbientCapabilities=CAP_NET_BIND_SERVICE`
+rather than running as root. Put Caddy/nginx in front for TLS.
+
+### Windows
+
+```powershell
+mkdir C:\pb-offline-sync
+$env:SYNC_COLLECTIONS = "notes"
+
+.\pb.exe superuser upsert you@example.com 'a-strong-password' --dir=C:\pb-offline-sync
+.\pb.exe serve --http=0.0.0.0:8090 --dir=C:\pb-offline-sync
+
+New-NetFirewallRule -DisplayName "pb-offline-sync" -Direction Inbound `
+  -LocalPort 8090 -Protocol TCP -Action Allow
+```
+
+For a real service, use [NSSM](https://nssm.cc/) (sets the environment and
+restarts on failure) or Task Scheduler with "Run whether user is logged on or
+not":
+
+```powershell
+nssm install pb-offline-sync C:\pb-offline-sync\pb.exe serve --http=0.0.0.0:8090 --dir=C:\pb-offline-sync
+# NSSM → Environment tab: SYNC_COLLECTIONS=notes
+nssm start pb-offline-sync
+```
+
+S3-compatible storage is configured the same way in both cases: Admin UI →
+**Settings → Files storage** (it lives in the app settings, not in an env var).
+Backups are still `pb_data` **plus** the bucket (versioning/replication), as
+noted in Part 3.
+
+---
+
+## Part 5 — Client: use it in a SvelteKit or React project
 
 The client is three packages:
 
