@@ -34,7 +34,7 @@ import (
 
 	"github.com/pocketbase/pocketbase"
 
-	"github.com/pb-offline-sync/server/syncplugin"
+	"github.com/karlomac/pb-offline-sync/server/syncplugin"
 )
 
 func main() {

@@ -130,6 +130,14 @@ index — I did **not** exhaustively verify that no *GitHub username/organizatio
 `pb-offline-sync` exists, nor check PyPI/other registries (out of scope). Names are
 first-come, first-served and this is a point-in-time result.
 
+**Resolution (2026-10-22).** The name was adopted and the repo renamed to
+`karlomac/pb-offline-sync`, so the Go module is now
+`github.com/karlomac/pb-offline-sync/server`. A same-day re-check confirmed
+`pb-offline-sync` free on npm and as a GitHub handle; the alternative `pb-sync`
+was taken on both (72 repos, npm 200), so the descriptive name was kept. The npm
+scope `@pb-offline-sync/*` is reserved for the client packages (still
+unpublished).
+
 ---
 
 ## Implications

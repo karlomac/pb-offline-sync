@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pb-offline-sync/server/syncplugin"
+	"github.com/karlomac/pb-offline-sync/server/syncplugin"
 )
 
 func getter(m map[string]string) func(string) string {

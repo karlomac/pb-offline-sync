@@ -8,10 +8,11 @@ conformance suite.
 The app reads and writes **only local data** and stays fully usable offline; a
 background engine reconciles it with PocketBase when connectivity returns.
 
-> **Status: pre-release.** The name, Go module path (`github.com/pb-offline-sync/server`)
-> and npm scope (`@pb-offline-sync/*`) are **provisional and unpublished** — see
-> `docs/ecosystem-scan.md`. Nothing here is on npm or the Go module proxy yet, so
-> install from source (below). Do not imply official PocketBase endorsement.
+> **Status: pre-release.** The project is **`pb-offline-sync`** and the Go module
+> is `github.com/karlomac/pb-offline-sync/server`. Nothing is published yet (not on
+> npm or the Go module proxy), so install from source (below); the npm scope
+> `@pb-offline-sync/*` is reserved for the client packages. Do not imply official
+> PocketBase endorsement.
 
 ---
 
@@ -157,11 +158,11 @@ module example.com/pb-sync-server
 go 1.27
 
 require (
-	github.com/pb-offline-sync/server v0.0.0
+	github.com/karlomac/pb-offline-sync/server v0.0.0
 	github.com/pocketbase/pocketbase v0.40.5
 )
 
-replace github.com/pb-offline-sync/server => ../pb-offline-sync/server
+replace github.com/karlomac/pb-offline-sync/server => ../pb-offline-sync/server
 ```
 
 #### `main.go`
@@ -175,7 +176,7 @@ import (
 
 	"github.com/pocketbase/pocketbase"
 
-	"github.com/pb-offline-sync/server/syncplugin"
+	"github.com/karlomac/pb-offline-sync/server/syncplugin"
 )
 
 func main() {

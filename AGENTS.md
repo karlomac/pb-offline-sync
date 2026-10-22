@@ -47,11 +47,11 @@ packages you touched.
 
 - **PocketBase:** `v0.40.5` (verify a supported range before widening; check the
   upstream changelog before using any API outside it).
-- **Go:** 1.27.x (module `github.com/pb-offline-sync/server`).
+- **Go:** 1.27.x (module `github.com/karlomac/pb-offline-sync/server`).
 - **Node:** 22.x.
 
-The Go module path and project name are provisional pending confirmation of the
-name/org (see `docs/ecosystem-scan.md`).
+The project name and Go module path are settled: `pb-offline-sync` and
+`github.com/karlomac/pb-offline-sync/server` (see `docs/ecosystem-scan.md`).
 
 ## Non-negotiable rules
 

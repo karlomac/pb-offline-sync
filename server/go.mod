@@ -1,4 +1,4 @@
-module github.com/pb-offline-sync/server
+module github.com/karlomac/pb-offline-sync/server
 
 go 1.27.2
 

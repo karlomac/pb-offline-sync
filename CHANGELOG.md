@@ -94,5 +94,5 @@ changes.
 
 ### Notes
 
-- The project and Go module path are provisional pending a name/availability
-  decision (`docs/ecosystem-scan.md`).
+- Naming is settled: the project is `pb-offline-sync`, the Go module is
+  `github.com/karlomac/pb-offline-sync/server` (`docs/ecosystem-scan.md`).
