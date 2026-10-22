@@ -1,4 +1,4 @@
-// Command pocketbase-sync is the default PocketBase build for pb-offline-sync:
+// Command pb-offline-sync is the default PocketBase build for pb-offline-sync:
 // a stock PocketBase server with the sync plugin wired in, configured entirely
 // by environment variables so one binary (and one container image) can serve
 // any app.

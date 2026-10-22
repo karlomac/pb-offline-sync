@@ -10,7 +10,7 @@ changes.
 
 ### Added
 
-- Deployable **default PocketBase build**: `server/cmd/pocketbase-sync` (stock
+- Deployable **default PocketBase build**: `server/cmd/pb-offline-sync` (stock
   PocketBase + the sync plugin, configured by `SYNC_*` environment variables)
   with a root `Dockerfile` and `docker-compose.yml` for Dokploy. The image
   follows the usual PocketBase-on-Dokploy `.env`: `PB_ADMIN_EMAIL` /

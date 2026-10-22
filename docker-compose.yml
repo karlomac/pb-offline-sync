@@ -13,7 +13,7 @@ services:
       args:
         # Empty => the version pinned in server/go.mod.
         PB_VERSION: ${PB_VERSION:-}
-    image: pb-offline-sync/pocketbase:latest
+    image: ghcr.io/karlomac/pb-offline-sync:latest
     restart: unless-stopped
     env_file:
       - .env

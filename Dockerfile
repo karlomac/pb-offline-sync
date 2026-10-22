@@ -31,7 +31,7 @@ RUN cd server \
  && if [ -n "$PB_VERSION" ]; then \
       go get "github.com/pocketbase/pocketbase@${PB_VERSION}" && go mod tidy; \
     fi \
- && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/pb ./cmd/pocketbase-sync
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/pb ./cmd/pb-offline-sync
 
 FROM alpine:3.20
 # ca-certificates for outbound TLS; busybox wget for HEALTHCHECK; su-exec lets

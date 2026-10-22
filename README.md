@@ -78,7 +78,7 @@ docs/test-scenarios.md    scenario catalog for both sides + coverage gaps
 docs/media-sync-plan.md   design proposal for photo/video (media) sync
 conformance/              language-neutral JSON fixtures both sides must pass
 server/                   Go module: the PocketBase plugin (package syncplugin)
-server/cmd/pocketbase-sync/   the default PocketBase build (env-configured)
+server/cmd/pb-offline-sync/   the default PocketBase build (env-configured)
 Dockerfile                production image for the bundled build
 docker-entrypoint.sh      container entrypoint: admin bootstrap + serve
 docker-compose.yml        local / Dokploy Compose deployment
@@ -94,7 +94,7 @@ examples/expo-notes/      example app (roadmap)
 ## Part 1 — Server: the PocketBase build
 
 The server is PocketBase with the sync plugin compiled in. This repo ships that
-app at `server/cmd/pocketbase-sync`, configured entirely by environment
+app at `server/cmd/pb-offline-sync`, configured entirely by environment
 variables, so **one binary and one image serve every app** — it is the default
 PocketBase build.
 
@@ -104,7 +104,7 @@ Build it directly, or let Dokploy build the shipped `Dockerfile` (see Part 3):
 
 ```bash
 cd server
-go build -o pb ./cmd/pocketbase-sync
+go build -o pb ./cmd/pb-offline-sync
 
 # no collections listed => plain PocketBase (plugin off)
 ./pb serve --http=0.0.0.0:8090
@@ -301,7 +301,7 @@ docs if a step differs.)
 ### 1. Use the shipped `Dockerfile`
 
 This repo already contains a production `Dockerfile` at the root. It builds
-`server/cmd/pocketbase-sync`, runs as a non-root user, and exposes a
+`server/cmd/pb-offline-sync`, runs as a non-root user, and exposes a
 `/api/health` check — there is nothing to write. Point Dokploy at the **repo
 root**.
 
@@ -405,7 +405,7 @@ layer needs a container.
 
 ```bash
 cd server
-CGO_ENABLED=0 go build -trimpath -o pb ./cmd/pocketbase-sync
+CGO_ENABLED=0 go build -trimpath -o pb ./cmd/pb-offline-sync
 ```
 
 Cross-compile elsewhere without a C toolchain (PocketBase's SQLite driver is pure
@@ -413,9 +413,9 @@ Go):
 
 ```bash
 # Windows
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o pb.exe ./cmd/pocketbase-sync
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o pb.exe ./cmd/pb-offline-sync
 # Linux arm64 (e.g. a Pi)
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o pb ./cmd/pocketbase-sync
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o pb ./cmd/pb-offline-sync
 ```
 
 ### What changes vs Docker
