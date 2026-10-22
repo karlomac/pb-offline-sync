@@ -10,6 +10,15 @@ changes.
 
 _Nothing yet._
 
+## [0.1.0-rc.2] - 2026-10-22
+
+### Fixed
+
+- Release workflow: download only the `bin-*` binary artifacts. Downloading every
+  artifact in the run also pulled the `.dockerbuild` record left by buildx, which
+  failed to download and aborted the GitHub Release step (`0.1.0-rc.1` published
+  the image and the module tag, but no release).
+
 ## [0.1.0-rc.1] - 2026-10-22
 
 ### Added

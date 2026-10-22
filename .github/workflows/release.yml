@@ -172,6 +172,10 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
+          # Only the cross-compiled binaries. Without the pattern this also pulls
+          # the `.dockerbuild` record artifact that buildx leaves behind, which
+          # fails to download and breaks the release.
+          pattern: bin-*
           path: dist
           merge-multiple: true
 
