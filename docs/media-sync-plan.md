@@ -1,11 +1,21 @@
 # Media sync plan (photos & video)
 
-**Status: proposal, not implemented.** This is a design document for a *future*
-protocol addition (media sync). It is **not** part of the frozen
-`docs/protocol.md` v1.0 — anything here that ships must be a deliberate v1.1
-spec change first (see `AGENTS.md` rule 3). Nothing in the current codebase
-implements it; today file **content** sync is an explicit non-goal and file
-fields are rejected on push (`file_field_unsupported`).
+**Status: accepted — shipped as `docs/protocol.md` §18 (v1.1, additive; wire
+version stays `1`).** Executed 2026-10-22: MED-1 (spec + 10 media conformance
+fixtures), MED-2 (server, `server/syncplugin/media.go`), MED-4 (relation
+workflow fixture), MED-5 (GC/sweep/`/info`), and the protocol-level client
+media uploader (`client/core/src/media.ts`, `transport-pocketbase` methods).
+Deferred: the Expo-native slice of MED-3 (hash cache keyed on asset mtime,
+two-lane background policy, poster/thumb generation, media-library scan — they
+belong in the future Expo adapter/an app host), and MED-6 (presigned direct
+upload).
+
+Executed simplifications vs. this proposal: the dedup-hit `init` response omits
+`file.url` and `commit` omits `thumbs` (clients build PB file URLs themselves —
+`/api/files/{collection}/{id}/{file}?thumb=…` with a file token).
+
+The historical proposal text below is kept for rationale; where it disagrees
+with `docs/protocol.md` §18, §18 wins.
 
 ## 1. Why media can't ride `push`/`pull`
 

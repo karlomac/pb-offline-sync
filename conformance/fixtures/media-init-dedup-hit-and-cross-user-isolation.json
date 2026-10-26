@@ -1,0 +1,24 @@
+{
+  "name": "media-init-dedup-hit-and-cross-user-isolation",
+  "description": "A second init with the same hash dedups for the owner but not across users (§18.1, §18.2).",
+  "config": { "media": { "collection": "media" } },
+  "blobs": { "a": "hello world" },
+  "users": ["alice", "bob"],
+  "steps": [
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": "upload", "uploadId": "$string", "chunkSize": "$int", "expiresIn": "$int" } },
+    { "as": "alice",
+      "media": { "op": "upload", "blob": "a" },
+      "expect": { "status": 204 } },
+    { "as": "alice",
+      "media": { "op": "commit", "request": { "uploadId": "$uploadId" } },
+      "expect": { "status": "ok", "mediaId": "$string", "rev": 1, "file": { "size": 11 } } },
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": "exists", "mediaId": "$string", "rev": 1 } },
+    { "as": "bob",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": "upload", "uploadId": "$string", "chunkSize": "$int", "expiresIn": "$int" } }
+  ]
+}

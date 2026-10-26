@@ -1,0 +1,36 @@
+{
+  "name": "media-relation-workflow",
+  "description": "Upload, commit, relate the mediaId to a business record, and see both records on pull (§18.1, MED-4).",
+  "config": {
+    "collections": {
+      "notes": { "ownerField": "owner", "conflictPolicy": "serverWins", "deletePolicy": "deleteWins",
+        "fields": [ { "name": "title", "type": "text", "writable": true }, { "name": "attachment", "type": "relation", "target": "media", "writable": true } ] }
+    },
+    "media": { "collection": "media" }
+  },
+  "blobs": { "a": "hello world" },
+  "users": ["alice"],
+  "steps": [
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": "upload", "uploadId": "$string" } },
+    { "as": "alice",
+      "media": { "op": "upload", "blob": "a" },
+      "expect": { "status": 204 } },
+    { "as": "alice",
+      "media": { "op": "commit", "request": { "uploadId": "$uploadId" } },
+      "expect": { "status": "ok", "mediaId": "$string", "rev": 1 } },
+    { "as": "alice", "push": { "mutations": [
+      { "id": "m1", "collection": "notes", "recordId": "notesrecord0001", "op": "create", "fields": { "title": "with attachment", "attachment": "$mediaId" } }
+    ] }, "expect": { "results": [ { "id": "m1", "status": "ok", "rev": 1 } ] } },
+    { "as": "alice", "pull": {},
+      "expect": {
+        "mode": "snapshot",
+        "changes": [
+          { "collection": "media", "op": "upsert", "rev": 1 },
+          { "collection": "notes", "recordId": "notesrecord0001", "op": "upsert", "rev": 1 }
+        ],
+        "hasMore": false
+      } }
+  ]
+}
