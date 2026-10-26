@@ -46,6 +46,41 @@ type CollectionConfig struct {
 	DeletePolicy DeletePolicy
 }
 
+// MediaConfig configures the media channel (protocol §18). A nil Media on
+// Config disables media sync entirely (the endpoints are not registered).
+type MediaConfig struct {
+	// Collection is the synced media collection with the fixed field set of
+	// §18.1 (owner/sha256/size/mime/filename/file/poster). Default "media"; it
+	// is added to Config.Collections automatically if not already there.
+	Collection string
+
+	// MaxFileSize caps the declared and staged size in bytes (0 = unlimited).
+	MaxFileSize int64
+
+	// PerUserQuota caps the summed media size per user in bytes (0 = unlimited).
+	PerUserQuota int64
+
+	// ChunkSize is the recommended chunk size advertised in /info (default 8 MiB).
+	ChunkSize int
+
+	// PosterMaxBytes caps the optional client-generated JPEG poster (§18.4,
+	// default 8 MiB); also the media.poster field's file size cap.
+	PosterMaxBytes int64
+
+	// StagingTTL is how long an upload session (and its staged bytes) survive
+	// without progress before SweepMediaStaging removes it (default 24h).
+	StagingTTL time.Duration
+
+	// GCGrace keeps unreferenced media records younger than this from MediaGC
+	// (default 24h), so an in-flight relation push does not race the GC.
+	GCGrace time.Duration
+
+	// MimeAllowlist is a list of exact MIME types or "type/" prefixes. Empty
+	// selects the default set (image/*, video/*, audio/*). text/html and
+	// image/svg+xml are always denied (protocol §18.6).
+	MimeAllowlist []string
+}
+
 // Config configures the sync plugin. Limit fields must not exceed the advertised
 // values (protocol §5); zero values are replaced with the defaults below.
 type Config struct {
@@ -62,6 +97,9 @@ type Config struct {
 	// requires advertising idempotencyRetentionDays but defines no wire field
 	// for change-log retention (§5), so this is NOT exposed in /info.
 	ChangeLogRetention time.Duration
+
+	// Media enables the media channel (protocol §18) when non-nil.
+	Media *MediaConfig
 }
 
 const (
@@ -71,6 +109,10 @@ const (
 	defaultMaxBodyBytes             = 1048576
 	defaultIdempotencyRetentionDays = 14
 	defaultChangeLogRetention       = 30 * 24 * time.Hour
+
+	defaultMediaCollection = "media"
+	defaultMediaChunkSize  = 8 << 20
+	defaultMediaTTL        = 24 * time.Hour
 )
 
 func (cfg *Config) applyDefaults() {
@@ -94,6 +136,28 @@ func (cfg *Config) applyDefaults() {
 	}
 	if cfg.ChangeLogRetention <= 0 {
 		cfg.ChangeLogRetention = defaultChangeLogRetention
+	}
+	if cfg.Media != nil {
+		if cfg.Media.Collection == "" {
+			cfg.Media.Collection = defaultMediaCollection
+		}
+		if cfg.Media.ChunkSize <= 0 {
+			cfg.Media.ChunkSize = defaultMediaChunkSize
+		}
+		if cfg.Media.PosterMaxBytes <= 0 {
+			cfg.Media.PosterMaxBytes = posterMaxBytes
+		}
+		if cfg.Media.StagingTTL <= 0 {
+			cfg.Media.StagingTTL = defaultMediaTTL
+		}
+		if cfg.Media.GCGrace <= 0 {
+			cfg.Media.GCGrace = defaultMediaTTL
+		}
+		// Media records sync through the ordinary change log (§18.1); the
+		// collection must therefore be a configured synced collection.
+		if _, ok := cfg.Collections[cfg.Media.Collection]; !ok {
+			cfg.Collections[cfg.Media.Collection] = CollectionConfig{OwnerField: mediaOwnerField}
+		}
 	}
 	for name, cc := range cfg.Collections {
 		if cc.Conflict == "" {
@@ -156,6 +220,49 @@ func (cfg Config) validate(app core.App) error {
 		return errors.New("syncplugin: limit values must be positive")
 	}
 
+	if cfg.Media != nil {
+		if err := validateMediaCollection(app, *cfg.Media); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateMediaCollection checks the media collection against the fixed field
+// set of protocol §18.1 and fails fast at serve time.
+func validateMediaCollection(app core.App, mc MediaConfig) error {
+	col, err := app.FindCollectionByNameOrId(mc.Collection)
+	if err != nil {
+		return fmt.Errorf("syncplugin: media collection %q: %w", mc.Collection, err)
+	}
+	if col.IsView() {
+		return fmt.Errorf("syncplugin: media collection %q is a view collection", mc.Collection)
+	}
+	want := map[string]string{
+		mediaSHAField:    "text",
+		mediaSizeField:   "number",
+		mediaMimeField:   "text",
+		mediaNameField:   "text",
+		mediaFileField:   "file",
+		mediaPosterField: "file",
+		"updated":        "autodate", // MediaGC orders on it
+	}
+	for name, typ := range want {
+		f := col.Fields.GetByName(name)
+		if f == nil || f.Type() != typ {
+			return fmt.Errorf("syncplugin: media collection %q: field %q (%s) is missing or wrong type", mc.Collection, name, typ)
+		}
+	}
+	of := col.Fields.GetByName(mediaOwnerField)
+	rf, ok := of.(*core.RelationField)
+	if !ok {
+		return fmt.Errorf("syncplugin: media collection %q: owner field %q must be a relation field", mc.Collection, mediaOwnerField)
+	}
+	target, err := app.FindCollectionByNameOrId(rf.CollectionId)
+	if err != nil || !target.IsAuth() {
+		return fmt.Errorf("syncplugin: media collection %q: owner field %q must relate to an auth collection", mc.Collection, mediaOwnerField)
+	}
 	return nil
 }
 
@@ -173,6 +280,9 @@ func MustRegister(app core.App, cfg Config) {
 		}
 		bindHooks(e.App, cfg)
 		bindRoutes(e.App, e.Router, cfg)
+		if cfg.Media != nil {
+			bindMediaRoutes(e.App, e.Router, cfg)
+		}
 		return e.Next()
 	})
 }

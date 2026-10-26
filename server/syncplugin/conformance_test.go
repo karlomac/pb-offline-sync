@@ -28,6 +28,7 @@ type fixture struct {
 	Description string          `json:"description"`
 	Config      json.RawMessage `json:"config"`
 	Users       []string        `json:"users"`
+	Blobs       map[string]string `json:"blobs"`
 	Steps       []fixtureStep   `json:"steps"`
 }
 
@@ -35,7 +36,16 @@ type fixtureStep struct {
 	As     string          `json:"as"`
 	Push   json.RawMessage `json:"push"`
 	Pull   json.RawMessage `json:"pull"`
+	Media  json.RawMessage `json:"media"`
 	Expect json.RawMessage `json:"expect"`
+}
+
+// fixtureMediaStep is a single media-channel interaction (protocol §18).
+type fixtureMediaStep struct {
+	Op      string          `json:"op"`
+	Request json.RawMessage `json:"request"`
+	Blob    string          `json:"blob"`
+	Slice   []int           `json:"slice"`
 }
 
 type fixturePush struct {
@@ -109,11 +119,47 @@ func TestConformanceFixturesAreWellFormed(t *testing.T) {
 				t.Errorf("%s: `as` %q must name one of the configured users", ctx, s.As)
 			}
 			hasPush, hasPull := isSet(s.Push), isSet(s.Pull)
-			if hasPush == hasPull {
-				t.Errorf("%s: exactly one of push/pull must be set", ctx)
+			hasMedia := isSet(s.Media)
+			if hasMedia {
+				if hasPush || hasPull {
+					t.Errorf("%s: exactly one of push/pull/media must be set", ctx)
+				}
+			} else if hasPush == hasPull {
+				t.Errorf("%s: exactly one of push/pull/media must be set", ctx)
 			}
 			if !isSet(s.Expect) {
 				t.Errorf("%s: expect is required", ctx)
+			}
+			if hasMedia {
+				var m fixtureMediaStep
+				if err := json.Unmarshal(s.Media, &m); err != nil {
+					t.Errorf("%s: invalid media step: %v", ctx, err)
+					continue
+				}
+				switch m.Op {
+				case "init", "commit":
+					if !isSet(m.Request) {
+						t.Errorf("%s: media %s requires request", ctx, m.Op)
+					}
+				case "upload":
+					if m.Blob == "" {
+						t.Errorf("%s: media upload requires blob", ctx)
+					} else if _, ok := f.Blobs[m.Blob]; !ok {
+						t.Errorf("%s: media upload references unknown blob %q", ctx, m.Blob)
+					}
+					if len(m.Slice) != 0 && len(m.Slice) != 2 {
+						t.Errorf("%s: media upload slice must be [from,to]", ctx)
+					} else if len(m.Slice) == 2 {
+						blob := f.Blobs[m.Blob]
+						if m.Slice[0] < 0 || m.Slice[1] > len(blob) || m.Slice[0] > m.Slice[1] {
+							t.Errorf("%s: media upload slice %v out of range for blob %q", ctx, m.Slice, m.Blob)
+						}
+					}
+				case "offset", "abort":
+				default:
+					t.Errorf("%s: media op %q must be init|upload|offset|commit|abort", ctx, m.Op)
+				}
+				continue
 			}
 			if !hasPush {
 				continue
