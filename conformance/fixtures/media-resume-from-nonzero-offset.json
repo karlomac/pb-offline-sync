@@ -1,0 +1,24 @@
+{
+  "name": "media-resume-from-nonzero-offset",
+  "description": "A killed upload resumes from the server offset and the remaining bytes complete the file (§18.3).",
+  "config": { "media": { "collection": "media" } },
+  "blobs": { "a": "hello world" },
+  "users": ["alice"],
+  "steps": [
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": "upload", "uploadId": "$string" } },
+    { "as": "alice",
+      "media": { "op": "upload", "blob": "a", "slice": [0, 5] },
+      "expect": { "status": 204 } },
+    { "as": "alice",
+      "media": { "op": "offset" },
+      "expect": { "status": 200, "uploadOffset": 5, "uploadLength": 11 } },
+    { "as": "alice",
+      "media": { "op": "upload", "blob": "a", "slice": [5, 11] },
+      "expect": { "status": 204 } },
+    { "as": "alice",
+      "media": { "op": "commit", "request": { "uploadId": "$uploadId" } },
+      "expect": { "status": "ok", "mediaId": "$string", "rev": 1, "file": { "size": 11 } } }
+  ]
+}

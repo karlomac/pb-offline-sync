@@ -1,0 +1,29 @@
+{
+  "name": "media-commit-idempotent-retry",
+  "description": "Re-committing a consumed uploadId returns the stored result and does not duplicate the media record (§18.4).",
+  "config": { "media": { "collection": "media" } },
+  "blobs": { "a": "hello world" },
+  "users": ["alice"],
+  "steps": [
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": "upload", "uploadId": "$string" } },
+    { "as": "alice",
+      "media": { "op": "upload", "blob": "a" },
+      "expect": { "status": 204 } },
+    { "as": "alice",
+      "media": { "op": "commit", "request": { "uploadId": "$uploadId" } },
+      "expect": { "status": "ok", "mediaId": "$string", "rev": 1 } },
+    { "as": "alice",
+      "media": { "op": "commit", "request": { "uploadId": "$uploadId" } },
+      "expect": { "status": "ok", "mediaId": "$string", "rev": 1 } },
+    { "as": "alice", "pull": {},
+      "expect": {
+        "mode": "snapshot",
+        "changes": [
+          { "collection": "media", "op": "upsert", "rev": 1 }
+        ],
+        "hasMore": false
+      } }
+  ]
+}
