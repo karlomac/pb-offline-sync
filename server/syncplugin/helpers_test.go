@@ -1,6 +1,7 @@
 package syncplugin
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -46,6 +47,16 @@ func newTestEnv(t *testing.T, cfg Config) *testEnv {
 	if cfg.Collections == nil {
 		cfg.Collections = map[string]CollectionConfig{
 			"notes": {OwnerField: "owner", Conflict: ServerWins, DeletePolicy: DeleteWins},
+		}
+	}
+
+	if cfg.Media != nil {
+		name := cfg.Media.Collection
+		if name == "" {
+			name = defaultMediaCollection
+		}
+		if _, err := EnsureMediaCollection(app, name, users.Id, cfg.Media.MaxFileSize, cfg.Media.PosterMaxBytes); err != nil {
+			t.Fatalf("ensure media collection: %v", err)
 		}
 	}
 
@@ -127,8 +138,17 @@ func (env *testEnv) saveNoteID(owner *core.Record, id, title, body string) *core
 }
 
 func (env *testEnv) request(method, path, token string, headers map[string]string) (*http.Response, []byte) {
+	return env.doRequest(method, path, token, headers, nil)
+}
+
+// doRequest is request with an optional request body (media upload channel).
+func (env *testEnv) doRequest(method, path, token string, headers map[string]string, body []byte) (*http.Response, []byte) {
 	env.t.Helper()
-	req := httptest.NewRequest(method, path, nil)
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, rdr)
 	if _, ok := headers["X-Sync-Protocol"]; !ok {
 		req.Header.Set("X-Sync-Protocol", "1")
 	}
@@ -141,8 +161,21 @@ func (env *testEnv) request(method, path, token string, headers map[string]strin
 	rec := httptest.NewRecorder()
 	env.mux.ServeHTTP(rec, req)
 	res := rec.Result()
-	body, _ := io.ReadAll(res.Body)
+	body, _ = io.ReadAll(res.Body)
 	return res, body
+}
+
+// doJSON runs a request and decodes the response body as a JSON object.
+func (env *testEnv) doJSON(method, path, token string, headers map[string]string, body []byte) (int, http.Header, map[string]any) {
+	env.t.Helper()
+	res, raw := env.doRequest(method, path, token, headers, body)
+	out := map[string]any{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &out); err != nil {
+			out = map[string]any{}
+		}
+	}
+	return res.StatusCode, res.Header, out
 }
 
 func (env *testEnv) getJSON(path, token string, headers map[string]string) (int, map[string]any) {

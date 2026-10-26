@@ -1,6 +1,7 @@
 package syncplugin
 
 import (
+	"math"
 	"net/http"
 	"time"
 
@@ -59,14 +60,26 @@ func handleInfo(e *core.RequestEvent, cfg Config) error {
 		}
 	}
 
-	return e.JSON(http.StatusOK, map[string]any{
+	body := map[string]any{
 		"protocol":      ProtocolVersion,
 		"supported":     []int{ProtocolVersion},
 		"pluginVersion": PluginVersion,
 		"serverTime":    serverTime(),
 		"limits":        limitsMap(cfg),
 		"collections":   collections,
-	})
+	}
+	// Additive media capability (protocol §18.6), present only when configured.
+	if cfg.Media != nil {
+		body["media"] = map[string]any{
+			"collection":      cfg.Media.Collection,
+			"chunkSize":       cfg.Media.ChunkSize,
+			"maxFileSize":     cfg.Media.MaxFileSize,
+			"perUserQuota":    cfg.Media.PerUserQuota,
+			"posterMaxBytes":  cfg.Media.PosterMaxBytes,
+			"stagingTtlHours": int(math.Ceil(cfg.Media.StagingTTL.Hours())),
+		}
+	}
+	return e.JSON(http.StatusOK, body)
 }
 
 // limitsMap is the /info `limits` object (protocol §5). ChangeLogRetention is

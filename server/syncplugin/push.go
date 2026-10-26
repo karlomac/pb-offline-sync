@@ -209,6 +209,11 @@ func applyMutation(app core.App, cfg Config, uid string, m pushMutation, depFail
 	if !ok {
 		return rejectedOutcome(m.ID, codeCollectionNotSynced), nil
 	}
+	// Media records are immutable and server-created (protocol §18.1): push
+	// never creates, updates or deletes them.
+	if cfg.Media != nil && m.Collection == cfg.Media.Collection {
+		return rejectedOutcome(m.ID, codeMediaImmutable), nil
+	}
 	col, err := app.FindCollectionByNameOrId(m.Collection)
 	if err != nil {
 		return rejectedOutcome(m.ID, codeCollectionNotSynced), nil
