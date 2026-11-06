@@ -27,6 +27,14 @@
 //	                                 (default: image/, video/, audio/; text/html and
 //	                                 image/svg+xml are always denied)
 //
+//	                                           Auth plugin (off unless AUTH_SIGNUP_MODE is set):
+//		AUTH_SIGNUP_MODE                 oauth|password|both
+//		AUTH_TURNSTILE_SECRET            Turnstile secret (required for password/both)
+//		AUTH_TURNSTILE_HOSTNAMES         comma-separated allowed Turnstile hostnames
+//		AUTH_TURNSTILE_VERIFY_URL        siteverify URL (default Cloudflare)
+//		AUTH_ALLOWED_EMAIL_DOMAINS       comma-separated allowed email domains
+//		AUTH_DISPOSABLE_DOMAINS          comma-separated blocked disposable domains
+//
 // Every collection named in SYNC_COLLECTIONS must exist and have the owner
 // field as a relation to an auth collection, or the server refuses to start
 // (the plugin validates at boot — see syncplugin.MustRegister).
@@ -42,6 +50,7 @@ import (
 
 	"github.com/pocketbase/pocketbase"
 
+	"github.com/karlomac/pb-offline-sync/server/authplugin"
 	"github.com/karlomac/pb-offline-sync/server/syncplugin"
 )
 
@@ -64,6 +73,16 @@ func main() {
 					app.Logger().Error("pb-offline-sync: prune failed", "error", err)
 				}
 			})
+		}
+	}
+
+	authCfg, authEnabled, err := authplugin.ConfigFromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("pb-offline-sync auth: %v", err)
+	}
+	if authEnabled {
+		if err := authplugin.Register(app, authCfg); err != nil {
+			log.Fatalf("pb-offline-sync auth: %v", err)
 		}
 	}
 
