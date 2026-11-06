@@ -34,6 +34,11 @@ const (
 type Config struct {
 	Mode Mode
 
+	// Collection is the auth collection the gate applies to (default "users").
+	// It is validated at boot: a missing/renamed collection would otherwise bind
+	// hooks that never fire, silently disabling the gate (audit A-1).
+	Collection string
+
 	TurnstileSecret    string
 	TurnstileHostnames []string
 	TurnstileVerifyURL string
@@ -52,6 +57,14 @@ type Config struct {
 }
 
 func (cfg Config) enabled() bool { return cfg.Mode != "" }
+
+// collection returns the configured auth collection name, defaulting to "users".
+func (cfg Config) collection() string {
+	if cfg.Collection != "" {
+		return cfg.Collection
+	}
+	return usersCollection
+}
 
 func (cfg Config) allowsOAuth() bool {
 	return cfg.Mode == OAuth || cfg.Mode == Both
@@ -86,18 +99,46 @@ func ConfigFromEnv(get func(string) string) (Config, bool, error) {
 	if verifyURL == "" {
 		verifyURL = defaultTurnstileVerifyURL
 	}
-	if _, err := url.ParseRequestURI(verifyURL); err != nil {
+	if err := validateVerifyURL(verifyURL); err != nil {
 		return Config{}, false, fmt.Errorf("AUTH_TURNSTILE_VERIFY_URL: %w", err)
+	}
+
+	collection := strings.TrimSpace(get("AUTH_COLLECTION"))
+	if collection == "" {
+		collection = usersCollection
 	}
 
 	return Config{
 		Mode:                mode,
+		Collection:          collection,
 		TurnstileSecret:     secret,
 		TurnstileHostnames:  list(get("AUTH_TURNSTILE_HOSTNAMES")),
 		TurnstileVerifyURL:  verifyURL,
 		AllowedEmailDomains: list(get("AUTH_ALLOWED_EMAIL_DOMAINS")),
 		DisposableDomains:   list(get("AUTH_DISPOSABLE_DOMAINS")),
 	}, true, nil
+}
+
+// validateVerifyURL requires TLS for the verifier (the Turnstile secret is sent
+// in the body) and allows plain HTTP only for loopback development. Redirects
+// are refused separately by the HTTP client (audit A-3).
+func validateVerifyURL(raw string) error {
+	u, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return err
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		switch u.Hostname() {
+		case "localhost", "127.0.0.1", "::1":
+			return nil
+		}
+		return fmt.Errorf("must use https (http is only allowed for loopback development)")
+	default:
+		return fmt.Errorf("unsupported scheme %q", u.Scheme)
+	}
 }
 
 // list splits a comma-separated env value, lowercasing entries and tolerating

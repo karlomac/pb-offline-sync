@@ -26,7 +26,18 @@ func Register(app core.App, cfg Config) error {
 		return nil
 	}
 
-	app.OnRecordCreateRequest(usersCollection).BindFunc(func(e *core.RecordRequestEvent) error {
+	colName := cfg.collection()
+	// Fail fast at serve time when the collection is missing/renamed or the
+	// verification requirement is absent: tag-filtered hooks on a non-existent
+	// collection never fire, which would silently disable the gate (A-1/A-2).
+	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		if err := validateSetup(e.App, cfg); err != nil {
+			return err
+		}
+		return e.Next()
+	})
+
+	app.OnRecordCreateRequest(colName).BindFunc(func(e *core.RecordRequestEvent) error {
 		needsVerification, err := authorizeCreate(e, cfg)
 		if err != nil {
 			return err
@@ -44,12 +55,12 @@ func Register(app core.App, cfg Config) error {
 		return nil
 	})
 
-	app.OnRecordAfterCreateError(usersCollection).BindFunc(func(e *core.RecordErrorEvent) error {
+	app.OnRecordAfterCreateError(colName).BindFunc(func(e *core.RecordErrorEvent) error {
 		pendingVerification.Delete(e.Record)
 		return e.Next()
 	})
 
-	app.OnRecordAfterCreateSuccess(usersCollection).BindFunc(func(e *core.RecordEvent) error {
+	app.OnRecordAfterCreateSuccess(colName).BindFunc(func(e *core.RecordEvent) error {
 		if err := e.Next(); err != nil {
 			return err
 		}
@@ -118,7 +129,7 @@ func authorizeCreate(e *core.RecordRequestEvent, cfg Config) (bool, error) {
 	if !ok {
 		return false, e.BadRequestError("A valid email address is required.", nil)
 	}
-	if inList(cfg.DisposableDomains, domain) {
+	if inDomainList(cfg.DisposableDomains, domain) {
 		return false, e.BadRequestError("Disposable email addresses are not allowed.", nil)
 	}
 	if len(cfg.AllowedEmailDomains) > 0 && !inList(cfg.AllowedEmailDomains, domain) {
@@ -159,6 +170,43 @@ func emailDomain(email string) (string, bool) {
 		return "", false
 	}
 	return domain, true
+}
+
+// validateSetup verifies the auth collection exists, is an auth collection, and
+// enforces the verification policy that makes the signup gate meaningful.
+func validateSetup(app core.App, cfg Config) error {
+	name := cfg.collection()
+	col, err := app.FindCollectionByNameOrId(name)
+	if err != nil {
+		return fmt.Errorf("authplugin: auth collection %q not found — set AUTH_COLLECTION to the app's auth collection name", name)
+	}
+	if !col.IsAuth() {
+		return fmt.Errorf("authplugin: collection %q is not an auth collection", name)
+	}
+	if cfg.allowsPassword() {
+		// Without an auth rule requiring verification, Turnstile-gated signups
+		// would be immediately usable and the verification email cosmetic (A-2).
+		if col.AuthRule == nil || strings.TrimSpace(*col.AuthRule) == "" {
+			return fmt.Errorf("authplugin: collection %q must set an authRule that requires verification (e.g. \"verified = true\") when AUTH_SIGNUP_MODE allows password signup", name)
+		}
+	}
+	return nil
+}
+
+// inDomainList matches an exact domain or any subdomain of an entry, so a
+// blocked disposable provider also blocks its rotating subdomains (A-4).
+func inDomainList(list []string, domain string) bool {
+	domain = strings.ToLower(domain)
+	for _, item := range list {
+		item = strings.ToLower(strings.TrimSpace(item))
+		if item == "" {
+			continue
+		}
+		if domain == item || strings.HasSuffix(domain, "."+item) {
+			return true
+		}
+	}
+	return false
 }
 
 func inList(list []string, v string) bool {
