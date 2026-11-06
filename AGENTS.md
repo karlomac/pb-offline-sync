@@ -8,6 +8,19 @@ Conventions for humans and coding agents working in this repository.
 database and a server-side PocketBase. **Protocol first:** `docs/protocol.md` is
 the frozen v1.0 contract and the source of truth; code follows it.
 
+## Branches and environments
+
+- **`main` is production.** A live app runs from it. Do **not** merge `staging`
+  into `main`, do not target `main` with feature PRs, and do not force-push or
+  rewrite it. Promotion to production is a deliberate maintainer decision.
+- **`staging` is the testbed** and a mirror of production plus features under
+  test (media sync, auth signup gate). Feature/fix PRs target `staging`; it may
+  be deployed to a test environment only.
+- There is currently **no planned `staging → main` merge**. Do not assume a
+  release train, and do not describe testbed fixes as "live" or "in
+  production".
+- CI runs on both branches; tags/releases remain a maintainer action.
+
 ## Read before changing anything
 
 - `docs/protocol.md` — the wire contract (frozen v1.0).
@@ -16,8 +29,9 @@ the frozen v1.0 contract and the source of truth; code follows it.
 - `docs/threat-model.md` — security requirements.
 - `docs/test-scenarios.md` — the scenario catalog for both sides, with coverage
   status and the prioritised gaps.
-- `docs/media-sync-plan.md` — **proposal** for photo/video sync (not part of the
-  frozen protocol; a v1.1 spec change is required before implementing).
+- `docs/media-sync-plan.md` — photo/video sync. Shipped on `staging` as the
+  additive protocol v1.1 extension (`docs/protocol.md` §18); still under test,
+  not in production.
 
 ## Repository layout
 

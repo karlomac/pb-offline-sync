@@ -16,6 +16,15 @@ background engine reconciles it with PocketBase when connectivity returns.
 
 ---
 
+## Branches
+
+- **`main`** — production (a live app runs from it). Feature work is not merged
+  here directly.
+- **`staging`** — testbed: production plus the features under test (media sync,
+  auth signup gate). Use it for validation deployments; it is not production.
+
+---
+
 ## Contents
 
 - [What it does](#what-it-does)
