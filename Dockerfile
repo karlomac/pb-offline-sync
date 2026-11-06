@@ -12,7 +12,7 @@
 #
 # syntax=docker/dockerfile:1
 
-FROM golang:1.27-alpine AS build
+FROM golang:1.27-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
 # Optional PocketBase version override for the Go build (e.g. v0.40.6).
 # Leave empty to use the version pinned in server/go.mod. NOTE: the plugin's
 # change-log/hook behaviour is only verified against the pinned version
@@ -33,7 +33,7 @@ RUN cd server \
     fi \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/pb ./cmd/pb-offline-sync
 
-FROM alpine:3.20
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 # ca-certificates for outbound TLS; busybox wget for HEALTHCHECK; su-exec lets
 # the entrypoint repair a root-owned bind mount, then drop to the `pb` user.
 RUN apk add --no-cache ca-certificates su-exec \

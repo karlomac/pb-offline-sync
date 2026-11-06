@@ -132,3 +132,20 @@ func TestConfigFromEnvMediaWiring(t *testing.T) {
 		t.Fatal("expected an error for a non-numeric media limit")
 	}
 }
+
+func TestPruneCronDefaultsAndExplicitDisable(t *testing.T) {
+	// Compose/Dokploy inject optional vars as empty strings: that must mean
+	// "default", not "disabled".
+	t.Setenv("SYNC_PRUNE_CRON", "")
+	if got := pruneCron(); got != "0 3 * * *" {
+		t.Fatalf("empty = %q, want the nightly default", got)
+	}
+	t.Setenv("SYNC_PRUNE_CRON", "OFF")
+	if got := pruneCron(); got != "" {
+		t.Fatalf("off = %q, want disabled", got)
+	}
+	t.Setenv("SYNC_PRUNE_CRON", "*/15 * * * *")
+	if got := pruneCron(); got != "*/15 * * * *" {
+		t.Fatalf("explicit cron = %q", got)
+	}
+}

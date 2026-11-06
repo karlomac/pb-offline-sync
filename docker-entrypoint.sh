@@ -18,8 +18,22 @@ set -eu
 DATA_DIR="${PB_DATA_DIR:-/pb/pb_data}"
 HTTP_ADDR="${PB_HTTP_ADDR:-0.0.0.0:8090}"
 
+# Refuse a data dir outside /pb: the recursive chown below must never walk an
+# arbitrary path from a mistyped env var (audit L-6).
+case "${DATA_DIR}" in
+  /pb/*) : ;;
+  *)
+    echo "pb-offline-sync: PB_DATA_DIR must be under /pb (got ${DATA_DIR})" >&2
+    exit 1
+    ;;
+esac
+
 if [ "$#" -eq 0 ]; then
   set -- serve --http="${HTTP_ADDR}" --dir="${DATA_DIR}"
+  # Encrypt PocketBase settings (SMTP/OAuth secrets) at rest when a key is set.
+  if [ -n "${PB_ENCRYPTION_KEY:-}" ]; then
+    set -- "$@" --encryptionEnv=PB_ENCRYPTION_KEY
+  fi
 fi
 
 is_root=0
@@ -34,8 +48,12 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 # Idempotent: creates the superuser on a fresh volume, updates it on later boots.
+# NOTE: PocketBase's CLI only accepts the password as an argument, so it is
+# briefly visible in this process's argv. Run first-boot init in a one-shot job
+# if /proc visibility by other containers/processes is in your threat model.
 if [ -n "${PB_ADMIN_EMAIL:-}" ] && [ -n "${PB_ADMIN_PASSWORD:-}" ]; then
-  echo "pb-offline-sync: ensuring superuser ${PB_ADMIN_EMAIL}"
+  # Do not log the email: boot logs are usually shipped to an aggregator.
+  echo "pb-offline-sync: ensuring superuser from PB_ADMIN_*"
   if [ "$is_root" = "1" ]; then
     su-exec pb:pb /pb/pb superuser upsert "${PB_ADMIN_EMAIL}" "${PB_ADMIN_PASSWORD}" --dir="${DATA_DIR}"
   else
