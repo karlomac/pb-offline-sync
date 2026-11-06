@@ -4,6 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pocketbase/pocketbase/tests"
+	"github.com/pocketbase/pocketbase/tools/cron"
+
 	"github.com/karlomac/pb-offline-sync/server/syncplugin"
 )
 
@@ -147,5 +150,63 @@ func TestPruneCronDefaultsAndExplicitDisable(t *testing.T) {
 	t.Setenv("SYNC_PRUNE_CRON", "*/15 * * * *")
 	if got := pruneCron(); got != "*/15 * * * *" {
 		t.Fatalf("explicit cron = %q", got)
+	}
+}
+
+func cronIDs(t *testing.T, app interface{ Cron() *cron.Cron }) map[string]bool {
+	t.Helper()
+	ids := map[string]bool{}
+	for _, job := range app.Cron().Jobs() {
+		ids[job.Id()] = true
+	}
+	return ids
+}
+
+func TestRegisterCronSchedulesMaintenance(t *testing.T) {
+	mediaCfg := syncplugin.Config{
+		Collections: map[string]syncplugin.CollectionConfig{"media": {OwnerField: "owner"}},
+		Media:       &syncplugin.MediaConfig{Collection: "media"},
+	}
+
+	// PocketBase registers its own jobs on a test app, so assert by id.
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatalf("NewTestApp: %v", err)
+	}
+	defer app.Cleanup()
+	t.Setenv("SYNC_PRUNE_CRON", "")
+	registerCron(app, mediaCfg)
+	ids := cronIDs(t, app)
+	for _, want := range []string{"pb-sync-prune", "pb-media-sweep", "pb-media-gc"} {
+		if !ids[want] {
+			t.Fatalf("cron job %q not scheduled; got %v", want, ids)
+		}
+	}
+
+	// Without media, only pruning is registered.
+	app2, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatalf("NewTestApp: %v", err)
+	}
+	defer app2.Cleanup()
+	registerCron(app2, syncplugin.Config{
+		Collections: map[string]syncplugin.CollectionConfig{"notes": {OwnerField: "owner"}},
+	})
+	ids = cronIDs(t, app2)
+	if !ids["pb-sync-prune"] || ids["pb-media-sweep"] || ids["pb-media-gc"] {
+		t.Fatalf("unexpected jobs without media: %v", ids)
+	}
+
+	// SYNC_PRUNE_CRON=none disables pruning but keeps the media jobs.
+	app3, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatalf("NewTestApp: %v", err)
+	}
+	defer app3.Cleanup()
+	t.Setenv("SYNC_PRUNE_CRON", "none")
+	registerCron(app3, mediaCfg)
+	ids = cronIDs(t, app3)
+	if ids["pb-sync-prune"] || !ids["pb-media-sweep"] || !ids["pb-media-gc"] {
+		t.Fatalf("unexpected jobs with pruning disabled: %v", ids)
 	}
 }
