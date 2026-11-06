@@ -144,7 +144,9 @@ field as a relation to an auth collection, or the server **refuses to start**
 
 The container image's entrypoint also understands `PB_ADMIN_EMAIL` /
 `PB_ADMIN_PASSWORD` (superuser bootstrap), `PB_DATA_DIR` (default
-`/pb/pb_data`) and `PB_HTTP_ADDR` (default `0.0.0.0:8090`).
+`/pb/pb_data`, must stay under `/pb`), `PB_HTTP_ADDR` (default
+`0.0.0.0:8090`) and `PB_ENCRYPTION_KEY` (when set, PocketBase settings such as
+SMTP/OAuth secrets are encrypted at rest via `--encryptionEnv`).
 
 ### Signup gating (optional auth plugin)
 
