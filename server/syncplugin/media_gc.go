@@ -111,15 +111,26 @@ func MediaGC(app core.App, cfg Config, now time.Time) (int, error) {
 
 	cutoff := now.Add(-mc.GCGrace).UTC().Format("2006-01-02 15:04:05.000Z")
 	deleted := 0
+	after := ""
 	for {
-		recs, err := app.FindRecordsByFilter(mc.Collection,
-			"updated < {:cutoff}", "", gcBatch, 0,
-			map[string]any{"cutoff": cutoff})
+		// Keyset pagination on id: a page of still-referenced records must not
+		// stop the scan, or unreferenced records past the first page are never
+		// collected (L-3).
+		filter := "updated < {:cutoff}"
+		params := map[string]any{"cutoff": cutoff}
+		if after != "" {
+			filter += " && id > {:after}"
+			params["after"] = after
+		}
+		recs, err := app.FindRecordsByFilter(mc.Collection, filter, "id", gcBatch, 0, params)
 		if err != nil {
 			return deleted, err
 		}
-		progressed := false
+		if len(recs) == 0 {
+			return deleted, nil
+		}
 		for _, rec := range recs {
+			after = rec.Id
 			if referenced[rec.Id] {
 				continue
 			}
@@ -127,9 +138,8 @@ func MediaGC(app core.App, cfg Config, now time.Time) (int, error) {
 				return deleted, err
 			}
 			deleted++
-			progressed = true
 		}
-		if !progressed || len(recs) < gcBatch {
+		if len(recs) < gcBatch {
 			return deleted, nil
 		}
 	}
