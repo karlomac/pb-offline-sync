@@ -326,12 +326,18 @@ posterMaxBytes)` in a migration, or by hand with the fixed fields from
    (M-2).
 
 `EnsureMediaCollection` sets all three and converges collections created by
-older versions. Then schedule the media jobs next to `Prune` — both are
-explicit:
+older versions.
+
+The env-configured binary schedules the maintenance jobs itself whenever
+`SYNC_MEDIA_COLLECTION` is set: `SweepMediaStaging` every 30 minutes and
+`MediaGC` nightly. If you embed the plugin in your own app instead, you must
+schedule them yourself — they are explicit (no goroutines in the library):
 
 ```go
-app.Cron().MustAdd("media-sweep", "15 3 * * *", func() {
+app.Cron().MustAdd("media-sweep", "*/30 * * * *", func() {
 	_, _ = syncplugin.SweepMediaStaging(app, cfg, time.Now().UTC())
+})
+app.Cron().MustAdd("media-gc", "15 3 * * *", func() {
 	_, _ = syncplugin.MediaGC(app, cfg, time.Now().UTC())
 })
 ```

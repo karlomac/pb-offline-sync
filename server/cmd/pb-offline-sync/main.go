@@ -27,6 +27,10 @@
 //	                                 (default: image/, video/, audio/; text/html and
 //	                                 image/svg+xml are always denied)
 //
+// When media is enabled the binary schedules its maintenance jobs: staging is
+// swept every 30 minutes and unreferenced media is garbage-collected nightly
+// (the library itself never starts goroutines — see SweepMediaStaging/MediaGC).
+//
 //	                                           Auth plugin (off unless AUTH_SIGNUP_MODE is set):
 //		AUTH_SIGNUP_MODE                 oauth|password|both
 //		AUTH_COLLECTION                  auth collection name (default "users")
@@ -50,6 +54,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/karlomac/pb-offline-sync/server/authplugin"
 	"github.com/karlomac/pb-offline-sync/server/syncplugin"
@@ -65,16 +70,7 @@ func main() {
 
 	if enabled {
 		syncplugin.MustRegister(app, cfg)
-
-		// The plugin never prunes on its own; schedule it here so the
-		// configured retention is actually applied.
-		if expr := pruneCron(); expr != "" {
-			app.Cron().MustAdd("pb-sync-prune", expr, func() {
-				if err := syncplugin.Prune(app, cfg); err != nil {
-					app.Logger().Error("pb-offline-sync: prune failed", "error", err)
-				}
-			})
-		}
+		registerCron(app, cfg)
 	}
 
 	authCfg, authEnabled, err := authplugin.ConfigFromEnv(os.Getenv)
@@ -90,6 +86,38 @@ func main() {
 	if err := app.Start(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+const (
+	mediaSweepCron = "*/30 * * * *"
+	mediaGCCron    = "15 3 * * *"
+)
+
+// registerCron wires the plugin's maintenance work. Prune, the staging sweep
+// and MediaGC are all explicit in the library (no goroutines), so a
+// deployment that never schedules them silently leaks disk: expired upload
+// sessions accumulate and unreferenced media is never freed.
+func registerCron(app core.App, cfg syncplugin.Config) {
+	if expr := pruneCron(); expr != "" {
+		app.Cron().MustAdd("pb-sync-prune", expr, func() {
+			if err := syncplugin.Prune(app, cfg); err != nil {
+				app.Logger().Error("pb-offline-sync: prune failed", "error", err)
+			}
+		})
+	}
+	if cfg.Media == nil {
+		return
+	}
+	app.Cron().MustAdd("pb-media-sweep", mediaSweepCron, func() {
+		if _, err := syncplugin.SweepMediaStaging(app, cfg, time.Now().UTC()); err != nil {
+			app.Logger().Error("pb-offline-sync: media staging sweep failed", "error", err)
+		}
+	})
+	app.Cron().MustAdd("pb-media-gc", mediaGCCron, func() {
+		if _, err := syncplugin.MediaGC(app, cfg, time.Now().UTC()); err != nil {
+			app.Logger().Error("pb-offline-sync: media GC failed", "error", err)
+		}
+	})
 }
 
 // pruneCron returns the configured cron expression, defaulting to nightly.
