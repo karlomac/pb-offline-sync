@@ -13,7 +13,7 @@
 # syntax=docker/dockerfile:1
 
 FROM golang:1.27-alpine AS build
-# Optional PocketBase version override for the Go build (e.g. v0.40.5).
+# Optional PocketBase version override for the Go build (e.g. v0.40.6).
 # Leave empty to use the version pinned in server/go.mod. NOTE: the plugin's
 # change-log/hook behaviour is only verified against the pinned version
 # (protocol §17.1.4) — bumping this is untested until CI covers it.

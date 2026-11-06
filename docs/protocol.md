@@ -520,9 +520,9 @@ Added in **v1.1** without a version bump: new endpoints under `/api/sync/media/`
 
 ### 18.1 Model
 
-- A dedicated **synced collection** (default name `media`) holds one record per unique blob, with the fixed fields `owner` (owner field), `sha256` (text), `size` (number), `mime` (text), `filename` (text), `file` (file field: the bytes), and `poster` (file field, optional: client-generated JPEG so HEIC/RAW/video always have a thumbnail source).
-- **Media records are immutable and server-created.** They are created only by the server at `commit`. Clients MUST NOT create, update, or delete media records via push; the server MUST reject such mutations with `rejected` / `media_immutable`. Unreferenced media is removed by server-side GC (§13-style retention; not a wire concern).
-- Business records reference media with **ordinary relation fields**, synced by `push`/`pull` as today. File fields remain non-writable on push (§4.1).
+- A dedicated **synced collection** (default name `media`) holds one record per unique blob, with the fixed fields `owner` (owner field), `sha256` (text), `size` (number), `mime` (text), `filename` (text), `file` (file field: the bytes), and `poster` (file field, optional: client-generated JPEG so HEIC/RAW/video always have a thumbnail source). Both file fields MUST be **Protected** and the collection MUST carry an owner-scoped list/view rule (`owner = @request.auth.id`); otherwise PocketBase serves the bytes to anyone holding the URL (§18.6).
+- **Media records are immutable and server-created.** They are created only by the server at `commit`. Clients MUST NOT create, update, or delete media records via push; the server MUST reject such mutations with `rejected` / `media_immutable`. The collection's create/update/delete API rules MUST be locked (`null`) for the same reason — the plugin's push check does not cover PocketBase's own record API. Unreferenced media is removed by server-side GC (§13-style retention; not a wire concern).
+- Business records reference media with **ordinary relation fields**, synced by `push`/`pull` as today. File fields remain non-writable on push (§4.1). Relation values MUST reference records owned by the caller; a cross-owner target is `rejected` / `validation_failed` (§14.6).
 - The dedup key is **(owner, sha256)**: dedup scope is per user (§14.5 — a global index would leak a cross-user content-existence oracle).
 - The identity of the bytes is the content hash, not `rev`. `rev` orders the media *record* changes only.
 
@@ -611,6 +611,8 @@ When media sync is configured, `/info` MAY include an additive `media` object:
 (`0` = unlimited; `maxFileSize`/`perUserQuota` are bytes.) Clients MUST respect these limits.
 
 Security (extends §14): upload sessions and media records are bound to the token's user — a session cannot be resumed or committed by another user; `sha256` is always recomputed server-side at commit; MIME allowlists MUST deny `text/html` and `image/svg+xml`; `init` SHOULD be rate-limited; abandoned staging MUST be swept by TTL so partial uploads cannot fill the disk; file tokens handed to clients MUST be short-lived.
+
+Operational requirements: the media file fields MUST be Protected and the collection's list/view rule owner-scoped (§18.1) — with a nil rule only superusers can read files, and with an unprotected field everyone can. Hosts MUST schedule `SweepMediaStaging` and `MediaGC` (both are explicit, like `Prune`); GC only deletes records unreferenced for the configured grace window. A stored `commit` result is retained for the staging TTL, so an idempotent retry after that window is answered by re-`init` dedup instead.
 
 ## 19. Changelog
 

@@ -137,6 +137,10 @@ field as a relation to an auth collection, or the server **refuses to start**
 | `SYNC_IDEMPOTENCY_RETENTION_DAYS` | `14` | idempotency-record retention |
 | `SYNC_CHANGELOG_RETENTION_DAYS` | `30` | change-log retention (server-side) |
 | `SYNC_PRUNE_CRON` | `0 3 * * *` | cron for retention pruning; empty disables |
+| `SYNC_MEDIA_COLLECTION` | *(empty)* | media collection name; empty keeps media sync off |
+| `SYNC_MEDIA_MAX_FILE_BYTES` | `0` | max media file size (0 = unlimited; set it in production) |
+| `SYNC_MEDIA_PER_USER_QUOTA` | `0` | per-user media quota in bytes (0 = unlimited) |
+| `SYNC_MEDIA_MIME_ALLOWLIST` | `image/,video/,audio/` | exact MIME types or `type/` prefixes |
 
 The container image's entrypoint also understands `PB_ADMIN_EMAIL` /
 `PB_ADMIN_PASSWORD` (superuser bootstrap), `PB_DATA_DIR` (default
@@ -162,7 +166,7 @@ go 1.27
 
 require (
 	github.com/karlomac/pb-offline-sync/server v0.0.0
-	github.com/pocketbase/pocketbase v0.40.5
+	github.com/pocketbase/pocketbase v0.40.6
 )
 
 replace github.com/karlomac/pb-offline-sync/server => ../pb-offline-sync/server
@@ -271,6 +275,43 @@ access through sync).
 File fields are **not** synced in v1: clients receive file field values on pull
 but will not push changes to them (`file_field_unsupported`).
 
+### Media sync (protocol §18)
+
+Media is **off** unless `SYNC_MEDIA_COLLECTION` is set. Media records are
+server-created and immutable; clients upload bytes through the media channel and
+reference the resulting record from ordinary relation fields.
+
+Provision the media collection *before* enabling it, either with
+`syncplugin.EnsureMediaCollection(app, "media", usersCollection.Id, maxFileSize,
+posterMaxBytes)` in a migration, or by hand with the fixed fields from
+`docs/protocol.md` §18.1. Three requirements are security-critical and are
+**validated at boot** (the server refuses to start otherwise):
+
+1. the `file` and `poster` file fields must be **Protected** — an unprotected
+   field is served by PocketBase to anyone with the URL, no auth (H-1);
+2. the collection needs owner-scoped **list/view** rules
+   (`owner = @request.auth.id`) or owners cannot download their own media
+   (with a nil rule only superusers can);
+3. **create/update/delete** rules must stay locked (`null`): the plugin rejects
+   media mutations on the sync path, but PocketBase's own record API is governed
+   by these rules, so an open write rule would bypass the immutability model
+   (M-2).
+
+`EnsureMediaCollection` sets all three and converges collections created by
+older versions. Then schedule the media jobs next to `Prune` — both are
+explicit:
+
+```go
+app.Cron().MustAdd("media-sweep", "15 3 * * *", func() {
+	_, _ = syncplugin.SweepMediaStaging(app, cfg, time.Now().UTC())
+	_, _ = syncplugin.MediaGC(app, cfg, time.Now().UTC())
+})
+```
+
+Set a finite `SYNC_MEDIA_MAX_FILE_BYTES` / `SYNC_MEDIA_PER_USER_QUOTA` in
+production: `0` means unlimited, which leaves disk exhaustion as the only
+stopping condition.
+
 ### Retention / pruning
 
 Change-log and idempotency rows are pruned by `syncplugin.Prune`, which is
@@ -329,7 +370,7 @@ This build follows the usual PocketBase-on-Dokploy `.env` (template:
 | Key | Meaning |
 |---|---|
 | `PB_ADMIN_EMAIL` / `PB_ADMIN_PASSWORD` | superuser created/refreshed idempotently on every boot |
-| `PB_VERSION` | optional build-time PocketBase version. **Blank means the pinned version** (`v0.40.5`), not "latest" — see the note below |
+| `PB_VERSION` | optional build-time PocketBase version. **Blank means the pinned version** (`v0.40.6`), not "latest" — see the note below |
 | `PB_DATA_PATH` | absolute host path bind-mounted to `/pb/pb_data` |
 | `SYNC_COLLECTIONS`, `SYNC_*` | sync plugin config (Part 1) |
 
@@ -707,7 +748,7 @@ tag that `go get` requires. Stable tags also move `latest`; prereleases
 
 | | Supported |
 |---|---|
-| PocketBase | `v0.40.5` (pinned; range not yet widened) |
+| PocketBase | `v0.40.6` (pinned; range not yet widened) |
 | Go | 1.27.x |
 | Node | 22.x |
 | Protocol | 1 |

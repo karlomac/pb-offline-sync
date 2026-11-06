@@ -11,7 +11,7 @@
 | **Plugin / server** | git tag `vX.Y.Z` + `syncplugin.PluginVersion` | SemVer | every release |
 | **Client packages** | `client/*/package.json` | SemVer | when they are published (currently `private`, `0.0.0`) |
 
-`server/go.mod`'s PocketBase pin (`v0.40.5`) is a **dependency pin, not a product
+`server/go.mod`'s PocketBase pin (`v0.40.6`) is a **dependency pin, not a product
 version** — it does not move with a release unless the plugin is re-verified
 against a new PocketBase (protocol §17.1.4).
 
