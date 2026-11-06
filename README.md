@@ -146,6 +146,34 @@ The container image's entrypoint also understands `PB_ADMIN_EMAIL` /
 `PB_ADMIN_PASSWORD` (superuser bootstrap), `PB_DATA_DIR` (default
 `/pb/pb_data`) and `PB_HTTP_ADDR` (default `0.0.0.0:8090`).
 
+### Signup gating (optional auth plugin)
+
+`server/authplugin` gates new-account signup, off unless `AUTH_SIGNUP_MODE` is
+set. It only gates **creation**; sign-in, OTP and admin flows are untouched.
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `AUTH_SIGNUP_MODE` | *(empty)* | `oauth` \| `password` \| `both`; empty disables the plugin |
+| `AUTH_COLLECTION` | `users` | auth collection to gate (validated at boot) |
+| `AUTH_TURNSTILE_SECRET` | — | Cloudflare Turnstile secret (required for `password`/`both`) |
+| `AUTH_TURNSTILE_HOSTNAMES` | *(empty)* | allowed Turnstile hostnames (comma-separated; recommended) |
+| `AUTH_TURNSTILE_VERIFY_URL` | Cloudflare siteverify | verifier URL; must be https (http only for loopback) |
+| `AUTH_ALLOWED_EMAIL_DOMAINS` | *(empty)* | allowlist, exact domain match (`@` optional) |
+| `AUTH_DISPOSABLE_DOMAINS` | *(empty)* | blocklist, exact domain **or subdomain** match |
+
+The server refuses to start when `AUTH_COLLECTION` is missing/not an auth
+collection (a renamed collection would otherwise silently disable the gate), or
+in `password`/`both` mode when the collection's **auth rule** does not require
+verification. Set it to `verified = true` so a Turnstile-gated account is
+unusable until the verification email is confirmed; the plugin sends that email
+on password signup. Disposable-domain blocking covers subdomains, so
+`x.mailinator.com` is blocked by `mailinator.com`.
+
+The Turnstile verifier is called over TLS, refuses redirects (so the secret can
+never be replayed to another host), and is bounded to 5 s / 1 MiB. Signup has no
+built-in rate limit: put `/api/collections/<auth>/records` behind PocketBase's
+rate limiter or a proxy limit.
+
 ### Option B — embed the plugin in your own PocketBase app
 
 Use this if you already have a PocketBase app, or want to configure it in code

@@ -29,6 +29,7 @@
 //
 //	                                           Auth plugin (off unless AUTH_SIGNUP_MODE is set):
 //		AUTH_SIGNUP_MODE                 oauth|password|both
+//		AUTH_COLLECTION                  auth collection name (default "users")
 //		AUTH_TURNSTILE_SECRET            Turnstile secret (required for password/both)
 //		AUTH_TURNSTILE_HOSTNAMES         comma-separated allowed Turnstile hostnames
 //		AUTH_TURNSTILE_VERIFY_URL        siteverify URL (default Cloudflare)

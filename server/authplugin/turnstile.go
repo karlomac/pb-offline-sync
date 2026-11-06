@@ -17,6 +17,16 @@ const (
 	turnstileMaxBody = 1 << 20
 )
 
+// turnstileClient never follows redirects: Go replays the request body on
+// 307/308, which would hand the Turnstile secret to whatever the verifier
+// redirects to (audit A-3). A redirect therefore fails the status check.
+var turnstileClient = &http.Client{
+	Timeout: turnstileTimeout,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 // verifyToken runs the configured verifier and returns the hostname Cloudflare
 // reports for the solved challenge.
 func (cfg Config) verifyToken(ctx context.Context, token, remoteIP string) (string, error) {
@@ -48,7 +58,7 @@ func verifyTurnstileHTTP(ctx context.Context, cfg Config, token, remoteIP string
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := turnstileClient.Do(req)
 	if err != nil {
 		return "", err
 	}

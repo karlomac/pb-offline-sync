@@ -13,6 +13,7 @@ import (
 // ordinary synced-collection create still writes sync_meta and the change log.
 func TestSyncedCollectionWritesUnaffected(t *testing.T) {
 	app := newTestApp(t)
+	prepareUsers(t, app)
 
 	users, err := app.FindCollectionByNameOrId(usersCollection)
 	if err != nil {
