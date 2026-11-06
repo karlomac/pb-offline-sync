@@ -136,7 +136,7 @@ field as a relation to an auth collection, or the server **refuses to start**
 | `SYNC_MAX_BODY_BYTES` | `1048576` | max push body size |
 | `SYNC_IDEMPOTENCY_RETENTION_DAYS` | `14` | idempotency-record retention |
 | `SYNC_CHANGELOG_RETENTION_DAYS` | `30` | change-log retention (server-side) |
-| `SYNC_PRUNE_CRON` | `0 3 * * *` | cron for retention pruning; empty disables |
+| `SYNC_PRUNE_CRON` | `0 3 * * *` | cron for retention pruning; `none` disables |
 | `SYNC_MEDIA_COLLECTION` | *(empty)* | media collection name; empty keeps media sync off |
 | `SYNC_MEDIA_MAX_FILE_BYTES` | `0` | max media file size (0 = unlimited; set it in production) |
 | `SYNC_MEDIA_PER_USER_QUOTA` | `0` | per-user media quota in bytes (0 = unlimited) |
@@ -310,7 +310,19 @@ app.Cron().MustAdd("media-sweep", "15 3 * * *", func() {
 
 Set a finite `SYNC_MEDIA_MAX_FILE_BYTES` / `SYNC_MEDIA_PER_USER_QUOTA` in
 production: `0` means unlimited, which leaves disk exhaustion as the only
-stopping condition.
+stopping condition. Rate-limit `/api/sync/media/init` at the proxy or with
+PocketBase's rate limiter; each `init` allocates a staging directory.
+
+The MIME allowlist is **advisory**: the declared MIME is checked at `init`, but
+bytes are not sniffed. That is safe for XSS because PocketBase serves only
+images/audio/video/PDF inline and forces `Content-Disposition: attachment` plus
+a sandbox CSP for everything else — do not re-serve media from your own handler
+based on the declared `mime` field.
+
+`sync_meta` keeps one tombstone row per record ever created (by design, so
+deleted ids are never reused); `Prune` does not remove it. Plan storage for it,
+and note that `Prune` does remove change-log, idempotency and conflict-diagnostic
+rows on their retention schedules.
 
 ### Retention / pruning
 
@@ -355,7 +367,7 @@ root**.
 docker build -t pb-offline-sync .
 docker run -p 8090:8090 \
   -v /etc/dokploy/storage/pb-sync/pb_data:/pb/pb_data \
-  -e PB_ADMIN_EMAIL=you@example.com -e PB_ADMIN_PASSWORD='change-me' \
+  -e PB_ADMIN_EMAIL=you@example.com -e PB_ADMIN_PASSWORD='YOUR_STRONG_PASSWORD' \
   -e SYNC_COLLECTIONS=notes pb-offline-sync
 ```
 
@@ -642,6 +654,9 @@ Reads are plain local reads through the same adapter:
 const rows = await storage.transaction((tx) => tx.list("notes"));
 ```
 
+**Cursors are opaque.** Never parse, edit or construct them: they are the
+server's bookkeeping, and a hand-edited cursor can silently skip records.
+
 **Lifecycle:** call `engine.syncNow()` (or the convenience hooks
 `onForeground()` / `onConnectivity()` / `onNudge()`) whenever the app resumes,
 connectivity returns, or the nudge fires. Conflicts surfaced in `status()` come
@@ -655,7 +670,13 @@ platform-independent and run in the browser — the engine's only requirement is
 SQLite adapter exists), so for SvelteKit or React-on-web you provide one, e.g.
 over IndexedDB (Dexie, `idb`, …).
 
-Wiring is identical to the Expo example, minus `openExpoDriver`:
+Wiring is identical to the Expo example, minus `openExpoDriver`.
+
+> **Token storage:** the transport only reads what your `getToken` returns. If
+> you use `localStorage`, any script injected into the page can read a
+> long-lived token that survives reload. Prefer an in-memory token refreshed on
+> load, or an httpOnly cookie held by a server-side proxy. The engine never
+> persists the token itself.
 
 ```ts
 import { SyncEngine, type StorageAdapter, type Tx } from "@pb-offline-sync/core";

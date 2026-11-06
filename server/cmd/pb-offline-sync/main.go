@@ -17,7 +17,7 @@
 //	SYNC_IDEMPOTENCY_RETENTION_DAYS  idempotency retention (default 14)
 //	SYNC_CHANGELOG_RETENTION_DAYS    change-log retention (default 30)
 //	SYNC_PRUNE_CRON                  cron expr for retention pruning
-//	                                 (default "0 3 * * *"; empty disables)
+//	                                 (default "0 3 * * *"; "none" disables)
 //	SYNC_MEDIA_COLLECTION            media collection name; empty disables media
 //	                                 (see docs/protocol.md §18 for the required
 //	                                 Protected file fields and owner-scoped rules)
@@ -72,13 +72,18 @@ func main() {
 	}
 }
 
-// pruneCron returns the configured cron expression, defaulting to nightly and
-// treating an explicit empty value as "do not schedule".
+// pruneCron returns the configured cron expression, defaulting to nightly.
+// Empty means "unset" (compose/Dokploy inject optional variables as empty
+// strings), so disabling is explicit: "none" or "off".
 func pruneCron() string {
-	if v, ok := os.LookupEnv("SYNC_PRUNE_CRON"); ok {
-		return strings.TrimSpace(v)
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("SYNC_PRUNE_CRON"))); v {
+	case "":
+		return "0 3 * * *"
+	case "none", "off":
+		return ""
+	default:
+		return v
 	}
-	return "0 3 * * *"
 }
 
 // configFromEnv builds the plugin config from environment variables. The second
