@@ -80,6 +80,11 @@ func Prune(app core.App, cfg Config) error {
 	if _, err := deleteOlderThan(app, "sync_processed", now.AddDate(0, 0, -cfg.IdempotencyRetentionDays)); err != nil {
 		return err
 	}
+	// Conflict diagnostics carry losing field values and accumulate on every
+	// stale-base overlap; nothing else ever deletes them (M-6).
+	if _, err := deleteOlderThan(app, "sync_conflicts", now.Add(-cfg.ChangeLogRetention)); err != nil {
+		return err
+	}
 	return nil
 }
 

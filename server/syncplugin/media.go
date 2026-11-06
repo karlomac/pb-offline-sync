@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,6 +49,11 @@ const (
 
 // posterMaxBytes caps the optional client-generated JPEG poster (§18.4).
 const posterMaxBytes = 8 << 20
+
+// mediaMaxOpenSessions bounds live upload sessions per user so a client cannot
+// fill staging with abandoned partials (§14.7, §18.6). Over the limit, init
+// answers 429 rate_limited with Retry-After.
+const mediaMaxOpenSessions = 16
 
 // mediaMimeDeny is always denied regardless of the allowlist (§18.6).
 var mediaMimeDeny = map[string]bool{"text/html": true, "image/svg+xml": true}
@@ -286,16 +292,49 @@ func (mc *MediaConfig) stagedBytes(app core.App, uid string) (int64, error) {
 			continue
 		}
 		s, found, _ := loadSession(filepath.Join(mc.stagingRoot(app), entry.Name()))
-		// Consumed or foreign sessions contribute nothing.
-		if !found || s.Owner != uid || s.Offset != s.Size {
+		// Any live session of this user reserves its declared size, including
+		// partially uploaded ones: otherwise parallel sessions oversubscribe the
+		// quota before the commit-time check sees them (§18.2).
+		if !found || s.Owner != uid || s.expired(time.Now().UTC()) {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(mc.stagingRoot(app), entry.Name(), "data.bin")); err != nil {
-			continue
+		dir := filepath.Join(mc.stagingRoot(app), entry.Name())
+		if _, err := os.Stat(filepath.Join(dir, "done.json")); err == nil {
+			continue // consumed: bytes are gone and the record counts instead
 		}
-		total += s.Size
+		if s.Size > 0 {
+			total += s.Size
+		}
 	}
 	return total, nil
+}
+
+// openSessions counts the user's live, unconsumed upload sessions.
+func (mc *MediaConfig) openSessions(app core.App, uid string) (int, error) {
+	entries, err := os.ReadDir(mc.stagingRoot(app))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	now := time.Now().UTC()
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(mc.stagingRoot(app), entry.Name())
+		s, found, _ := loadSession(dir)
+		if !found || s.Owner != uid || s.expired(now) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, "done.json")); err == nil {
+			continue
+		}
+		count++
+	}
+	return count, nil
 }
 
 // bindMediaRoutes registers the media endpoints (protocol §18). Only called
@@ -368,9 +407,20 @@ func handleMediaInit(e *core.RequestEvent, cfg Config) error {
 		})
 	}
 
-	// Quota is enforced before any bytes move (§18.2), counting committed bytes
-	// plus the declared sizes of the user's active staged sessions (so parallel
-	// sessions cannot oversubscribe the quota at init time).
+	// Quota and open-session limits are enforced before any bytes move (§18.2,
+	// §14.7). Declared sizes for active sessions include partial uploads, and
+	// absurd sizes are rejected so the byte sums cannot overflow.
+	if req.Size > math.MaxInt64/4 {
+		return writeError(e, http.StatusRequestEntityTooLarge, codeUploadTooLarge,
+			"Declared size is not supported.", nil)
+	}
+	if open, err := mc.openSessions(e.App, uid); err != nil {
+		return err
+	} else if open >= mediaMaxOpenSessions {
+		e.Response.Header().Set("Retry-After", "60")
+		return writeError(e, http.StatusTooManyRequests, "rate_limited",
+			"Too many open upload sessions; retry later.", nil)
+	}
 	if mc.PerUserQuota > 0 {
 		used, err := mediaBytesUsed(e.App, mc, mc.Collection, uid)
 		if err != nil {
@@ -425,19 +475,20 @@ func handleMediaUpload(e *core.RequestEvent, cfg Config) error {
 	if s.Owner != e.Auth.Id {
 		return writeError(e, http.StatusNotFound, codeUploadNotFound, "Unknown upload.", nil)
 	}
-	if s.expired(time.Now().UTC()) {
-		_ = os.RemoveAll(dir)
-		return writeError(e, http.StatusGone, codeUploadExpired, "Upload session expired.", nil)
-	}
 	// A consumed session (stored result kept, bytes gone) is upload_not_found on
-	// the upload channel too, so DELETE cannot destroy its stored result (§18.5).
-	// A fresh session (no bytes yet, no result) is still live.
+	// the upload channel too, so DELETE cannot destroy its stored result (§18.5)
+	// — checked before expiry so an expired consumed session is never deleted
+	// from this path (L-2). A fresh session (no bytes yet) is still live.
 	dataPath := filepath.Join(dir, "data.bin")
 	_, dataStatErr := os.Stat(dataPath)
 	if dataStatErr != nil {
 		if _, doneErr := os.Stat(filepath.Join(dir, "done.json")); doneErr == nil {
 			return writeError(e, http.StatusNotFound, codeUploadNotFound, "Unknown upload.", nil)
 		}
+	}
+	if s.expired(time.Now().UTC()) {
+		_ = os.RemoveAll(dir)
+		return writeError(e, http.StatusGone, codeUploadExpired, "Upload session expired.", nil)
 	}
 
 	switch e.Request.Method {
@@ -481,6 +532,10 @@ func handleMediaUpload(e *core.RequestEvent, cfg Config) error {
 		remaining := s.Size - s.Offset
 		n, err := io.Copy(f, io.LimitReader(e.Request.Body, remaining+1))
 		if err != nil {
+			// A dropped connection must not leave orphaned bytes behind the
+			// acknowledged offset, or the next resume appends after them and the
+			// commit fails hash_mismatch (L-1).
+			_ = f.Truncate(s.Offset)
 			return err
 		}
 		if n > remaining {
@@ -526,14 +581,10 @@ func handleMediaCommit(e *core.RequestEvent, cfg Config) error {
 	if err != nil || !found || s.Owner != uid {
 		return writeError(e, http.StatusNotFound, codeUploadNotFound, "Unknown upload.", nil)
 	}
-	if s.expired(time.Now().UTC()) {
-		_ = os.RemoveAll(dir)
-		return writeError(e, http.StatusGone, codeUploadExpired, "Upload session expired.", nil)
-	}
-
 	dataPath := filepath.Join(dir, "data.bin")
 	if _, statErr := os.Stat(dataPath); statErr != nil {
-		// Already committed: return the stored original result (§18.4 idempotency).
+		// Already committed: return the stored original result before the expiry
+		// branch can delete it (§18.4 idempotency; L-2).
 		if doneRaw, derr := os.ReadFile(filepath.Join(dir, "done.json")); derr == nil {
 			var done map[string]any
 			if json.Unmarshal(doneRaw, &done) == nil && done != nil {
@@ -541,6 +592,10 @@ func handleMediaCommit(e *core.RequestEvent, cfg Config) error {
 			}
 		}
 		return writeError(e, http.StatusNotFound, codeUploadNotFound, "Unknown upload.", nil)
+	}
+	if s.expired(time.Now().UTC()) {
+		_ = os.RemoveAll(dir)
+		return writeError(e, http.StatusGone, codeUploadExpired, "Upload session expired.", nil)
 	}
 	if s.Offset != s.Size {
 		return writeError(e, http.StatusBadRequest, "invalid_request",
