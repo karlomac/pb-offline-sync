@@ -8,6 +8,13 @@ Conventions for humans and coding agents working in this repository.
 database and a server-side PocketBase. **Protocol first:** `docs/protocol.md` is
 the frozen v1.0 contract and the source of truth; code follows it.
 
+## Branches and environments
+
+- `main` is **production** (the live app). No staging merges, no feature PRs, no
+  history rewrites.
+- `staging` is the testbed mirror plus features under test. There is no planned
+  staging→main merge.
+
 ## Read before changing anything
 
 - `docs/protocol.md` — the wire contract (frozen v1.0).
@@ -45,7 +52,7 @@ packages you touched.
 
 ## Pinned versions
 
-- **PocketBase:** `v0.40.5` (verify a supported range before widening; check the
+- **PocketBase:** `v0.40.6` (verify a supported range before widening; check the
   upstream changelog before using any API outside it).
 - **Go:** 1.27.x (module `github.com/karlomac/pb-offline-sync/server`).
 - **Node:** 22.x.

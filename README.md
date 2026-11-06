@@ -140,7 +140,9 @@ field as a relation to an auth collection, or the server **refuses to start**
 
 The container image's entrypoint also understands `PB_ADMIN_EMAIL` /
 `PB_ADMIN_PASSWORD` (superuser bootstrap), `PB_DATA_DIR` (default
-`/pb/pb_data`) and `PB_HTTP_ADDR` (default `0.0.0.0:8090`).
+`/pb/pb_data`; must stay under `/pb`), `PB_HTTP_ADDR` (default `0.0.0.0:8090`)
+and `PB_ENCRYPTION_KEY` (when set, PocketBase settings are encrypted at rest via
+`--encryptionEnv`).
 
 ### Option B — embed the plugin in your own PocketBase app
 
@@ -162,7 +164,7 @@ go 1.27
 
 require (
 	github.com/karlomac/pb-offline-sync/server v0.0.0
-	github.com/pocketbase/pocketbase v0.40.5
+	github.com/pocketbase/pocketbase v0.40.6
 )
 
 replace github.com/karlomac/pb-offline-sync/server => ../pb-offline-sync/server
@@ -314,7 +316,7 @@ root**.
 docker build -t pb-offline-sync .
 docker run -p 8090:8090 \
   -v /etc/dokploy/storage/pb-sync/pb_data:/pb/pb_data \
-  -e PB_ADMIN_EMAIL=you@example.com -e PB_ADMIN_PASSWORD='change-me' \
+  -e PB_ADMIN_EMAIL=you@example.com -e PB_ADMIN_PASSWORD='YOUR_STRONG_PASSWORD' \
   -e SYNC_COLLECTIONS=notes pb-offline-sync
 ```
 
@@ -329,7 +331,7 @@ This build follows the usual PocketBase-on-Dokploy `.env` (template:
 | Key | Meaning |
 |---|---|
 | `PB_ADMIN_EMAIL` / `PB_ADMIN_PASSWORD` | superuser created/refreshed idempotently on every boot |
-| `PB_VERSION` | optional build-time PocketBase version. **Blank means the pinned version** (`v0.40.5`), not "latest" — see the note below |
+| `PB_VERSION` | optional build-time PocketBase version. **Blank means the pinned version** (`v0.40.6`), not "latest" — see the note below |
 | `PB_DATA_PATH` | absolute host path bind-mounted to `/pb/pb_data` |
 | `SYNC_COLLECTIONS`, `SYNC_*` | sync plugin config (Part 1) |
 
@@ -707,7 +709,7 @@ tag that `go get` requires. Stable tags also move `latest`; prereleases
 
 | | Supported |
 |---|---|
-| PocketBase | `v0.40.5` (pinned; range not yet widened) |
+| PocketBase | `v0.40.6` (pinned; range not yet widened) |
 | Go | 1.27.x |
 | Node | 22.x |
 | Protocol | 1 |
