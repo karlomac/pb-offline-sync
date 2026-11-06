@@ -79,3 +79,21 @@ The project name and Go module path are settled: `pb-offline-sync` and
 ## Highest-risk areas (review these manually)
 
 Conflict logic, ownership checks, and hook/transaction atomicity.
+
+## Bug tracking (audits, reviews, builds)
+
+A bug is not finished until it is tracked in this repository:
+
+1. **Open a GitHub issue** as soon as an audit, code review, CI run or build/test
+   failure identifies a bug or security finding. Describe severity, exact
+   location (`file:line`, endpoint or collection), impact, and the evidence or
+   reproduction. Group by audited change-set or bug class — not one issue per
+   commit.
+2. **When a fix lands, comment on that issue** with: what changed, the tests
+   that now cover it, the commit(s), and a link to the PR. Put `Fixes #<n>` in
+   the PR body so the issue closes on merge.
+3. Keep the trail in one place: the issue carries problem → resolution history;
+   the PR carries the code.
+
+This applies to security audits, review findings, CI failures, and any
+build-time error that required a code change.
