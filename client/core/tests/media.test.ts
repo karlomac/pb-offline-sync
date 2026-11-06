@@ -225,3 +225,38 @@ describe("uploadMedia", () => {
     expect(freshBytes.join("")).toBe("0123456789");
   });
 });
+
+describe("media uploader response guards (audit M-7/M-8)", () => {
+  const base = { collection: "media", sha256: "a".repeat(64), size: 4, mime: "image/png", filename: "p.png" };
+  const src = () => ({ ...base, read: async () => new TextEncoder().encode("abcd") });
+
+  it("rejects a non-positive chunkSize instead of looping on 0-byte appends", async () => {
+    const t: MediaTransport = {
+      async mediaInit() {
+        return { status: "upload", uploadId: "u_1", chunkSize: 0, expiresIn: 60 };
+      },
+      async mediaOffset() { return 0; },
+      async mediaAppend() { throw new Error("must not append"); },
+      async mediaAbort() {},
+      async mediaCommit() { throw new Error("must not commit"); },
+    };
+    await expect(uploadMedia(t, src())).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects a negative or oversized server offset", async () => {
+    for (const offset of [-1, 99]) {
+      const t: MediaTransport = {
+        async mediaInit() {
+          return { status: "upload", uploadId: "u_1", chunkSize: 4, expiresIn: 60 };
+        },
+        async mediaOffset() { return offset; },
+        async mediaAppend() { throw new Error("must not append"); },
+        async mediaAbort() {},
+        async mediaCommit() { throw new Error("must not commit"); },
+      };
+      await expect(uploadMedia(t, src(), memStore({ uploadId: "u_1", offset: 0 }))).rejects.toMatchObject({
+        code: "invalid_response",
+      });
+    }
+  });
+});

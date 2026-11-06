@@ -233,7 +233,9 @@ export const TUS_CONTENT_TYPE = "application/offset+octet-stream";
 function parseOffset(res: Response, name: string): number {
   const raw = res.headers?.get?.(name);
   const n = Number(raw);
-  if (raw == null || !Number.isFinite(n)) {
+  // Tus offsets are non-negative integers; a negative or fractional value must
+  // not become a resume position (audit M-8).
+  if (raw == null || !Number.isSafeInteger(n) || n < 0) {
     throw new TransportError(`missing or malformed ${name} header`, { status: res.status });
   }
   return n;

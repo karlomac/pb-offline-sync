@@ -120,6 +120,9 @@ export async function uploadMedia(
         // The server's offset is the resume truth (§18.3); a stale local
         // offset is dropped.
         const serverOffset = await transport.mediaOffset(state.uploadId!);
+        if (!Number.isSafeInteger(serverOffset) || serverOffset < 0 || serverOffset > source.size) {
+          throw new TransportError("media: invalid upload offset in response", { code: "invalid_response" });
+        }
         if (serverOffset !== state.offset) {
           state = { uploadId: state.uploadId, offset: serverOffset };
         }
@@ -130,6 +133,11 @@ export async function uploadMedia(
         }
         throw err;
       }
+    }
+    // A zero/NaN/negative chunk size would make the loop below issue 0-byte
+    // appends forever (M-7); the server's recommendation is not trusted blindly.
+    if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
+      throw new TransportError("media: invalid chunk size in response", { code: "invalid_response" });
     }
     await store?.put(state);
 

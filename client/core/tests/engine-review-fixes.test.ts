@@ -82,3 +82,62 @@ describe("a sent create blocks later same-record edits", () => {
     });
   });
 });
+
+describe("hostile server responses cannot wedge a run (audit M-7/M-8)", () => {
+  it("stops pulling when hasMore=true never advances the cursor", async () => {
+    const storage = new MemoryStorageAdapter();
+    const transport = new MockTransport();
+    const engine = new SyncEngine({ storage, transport });
+
+    transport.pullHandler = () => ({
+      mode: "incremental",
+      changes: [],
+      cursor: "same-cursor",
+      hasMore: true,
+      serverTime: "",
+    });
+
+    // pullNow surfaces the protocol violation instead of looping; syncNow
+    // classifies it as a terminal error rather than offline (see isOffline).
+    await expect(engine.pullNow()).rejects.toThrow(/cursor did not advance/);
+  });
+
+  it("stops pushing when results match no batch entry", async () => {
+    const storage = new MemoryStorageAdapter();
+    const transport = new MockTransport();
+    const engine = new SyncEngine({ storage, transport });
+
+    await engine.applyLocal("create", "notes", A, { title: "a" });
+    transport.pushHandler = () => ({
+      results: [{ id: "unrelated-mutation", status: "ok" as const }],
+    });
+
+    await engine.syncNow();
+    const status = await engine.status();
+    expect(status.state).toBe("error");
+    expect(status.lastError).toMatch(/no progress/);
+    // The mutation is still queued, not lost.
+    expect(status.pending).toBe(1);
+  });
+
+  it("ignores changes with an invalid rev instead of corrupting ordering", async () => {
+    const storage = new MemoryStorageAdapter();
+    const transport = new MockTransport();
+    const engine = new SyncEngine({ storage, transport });
+
+    transport.pullHandler = () => ({
+      mode: "incremental",
+      changes: [
+        { collection: "notes", recordId: A, op: "upsert", rev: Number.NaN, record: { title: "bad" } },
+        { collection: "notes", recordId: B, op: "upsert", rev: 2, record: { title: "ok" } },
+      ],
+      cursor: "c1",
+      hasMore: false,
+      serverTime: "",
+    });
+
+    await engine.pullNow();
+    const rows = await storage.transaction((tx) => tx.list("notes"));
+    expect(rows.map((r) => r.recordId)).toEqual([B]);
+  });
+});
