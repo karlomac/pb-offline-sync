@@ -263,6 +263,23 @@ func validateMediaCollection(app core.App, mc MediaConfig) error {
 	if err != nil || !target.IsAuth() {
 		return fmt.Errorf("syncplugin: media collection %q: owner field %q must relate to an auth collection", mc.Collection, mediaOwnerField)
 	}
+
+	// §18.6: media files must be Protected, otherwise PocketBase serves them to
+	// anyone with the URL without consulting the view rule.
+	for _, fieldName := range []string{mediaFileField, mediaPosterField} {
+		f, ok := col.Fields.GetByName(fieldName).(*core.FileField)
+		if !ok || !f.Protected {
+			return fmt.Errorf("syncplugin: media collection %q: file field %q must be Protected (set it in the admin UI or call EnsureMediaCollection) so media is not served publicly", mc.Collection, fieldName)
+		}
+	}
+	// §18.1/§18.6: owners need an owner-scoped view rule to download their own
+	// media; write rules must stay locked because records are server-created.
+	if col.ListRule == nil || col.ViewRule == nil {
+		return fmt.Errorf("syncplugin: media collection %q: list/view rules must be set (recommended: %q) so owners can read their own media", mc.Collection, mediaViewRule)
+	}
+	if col.CreateRule != nil || col.UpdateRule != nil || col.DeleteRule != nil {
+		return fmt.Errorf("syncplugin: media collection %q: create/update/delete rules must be locked (null) — media records are server-created and immutable (§18.1)", mc.Collection)
+	}
 	return nil
 }
 

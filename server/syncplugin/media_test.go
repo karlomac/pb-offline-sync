@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tests"
 )
 
 // mediaTestConfig is a plugin config with media enabled and small limits so
@@ -712,4 +713,163 @@ func saveTestSession(dir string, s mediaSession) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "meta.json"), raw, 0o600)
+}
+
+func TestEnsureMediaCollectionProtectsFilesAndScopesRules(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatalf("NewTestApp: %v", err)
+	}
+	t.Cleanup(app.Cleanup)
+
+	users := core.NewAuthCollection("syncusers")
+	if err := app.Save(users); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureMediaCollection(app, "media", users.Id, 0, 0); err != nil {
+		t.Fatalf("EnsureMediaCollection: %v", err)
+	}
+
+	col, err := app.FindCollectionByNameOrId("media")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{mediaFileField, mediaPosterField} {
+		f, ok := col.Fields.GetByName(name).(*core.FileField)
+		if !ok || !f.Protected {
+			t.Fatalf("field %q must be Protected so files need a token/view rule (H-1)", name)
+		}
+	}
+	if col.ListRule == nil || *col.ListRule != mediaViewRule {
+		t.Fatalf("list rule = %v, want %q", col.ListRule, mediaViewRule)
+	}
+	if col.ViewRule == nil || *col.ViewRule != mediaViewRule {
+		t.Fatalf("view rule = %v, want %q", col.ViewRule, mediaViewRule)
+	}
+	for name, rule := range map[string]*string{
+		"create": col.CreateRule, "update": col.UpdateRule, "delete": col.DeleteRule,
+	} {
+		if rule != nil {
+			t.Fatalf("%s rule must stay locked (nil), got %q", name, *rule)
+		}
+	}
+
+	// validateMediaCollection accepts the provisioned shape.
+	if err := validateMediaCollection(app, MediaConfig{Collection: "media"}); err != nil {
+		t.Fatalf("validate provisioned collection: %v", err)
+	}
+}
+
+func TestValidateMediaCollectionRejectsInsecureShapes(t *testing.T) {
+	newApp := func(t *testing.T) *tests.TestApp {
+		t.Helper()
+		app, err := tests.NewTestApp()
+		if err != nil {
+			t.Fatalf("NewTestApp: %v", err)
+		}
+		t.Cleanup(app.Cleanup)
+		users := core.NewAuthCollection("syncusers")
+		if err := app.Save(users); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := EnsureMediaCollection(app, "media", users.Id, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+		return app
+	}
+
+	// Unprotected file field → reject (H-1).
+	app := newApp(t)
+	col, _ := app.FindCollectionByNameOrId("media")
+	// Replace the protected field with an unprotected one of the same type.
+	idx := col.Fields.GetByName(mediaFileField).GetId()
+	col.Fields.RemoveById(idx)
+	col.Fields.Add(&core.FileField{Name: mediaFileField, MaxSelect: 1, Protected: false})
+	if err := app.Save(col); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMediaCollection(app, MediaConfig{Collection: "media"}); err == nil ||
+		!strings.Contains(err.Error(), "Protected") {
+		t.Fatalf("want Protected error, got %v", err)
+	}
+
+	// Open write rule → reject (M-2).
+	app2 := newApp(t)
+	col2, _ := app2.FindCollectionByNameOrId("media")
+	open := ""
+	col2.CreateRule = &open
+	if err := app2.Save(col2); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMediaCollection(app2, MediaConfig{Collection: "media"}); err == nil ||
+		!strings.Contains(err.Error(), "locked") {
+		t.Fatalf("want locked-rules error, got %v", err)
+	}
+
+	// Nil view rule → reject (files would 404 for owners).
+	app3 := newApp(t)
+	col3, _ := app3.FindCollectionByNameOrId("media")
+	col3.ViewRule = nil
+	if err := app3.Save(col3); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMediaCollection(app3, MediaConfig{Collection: "media"}); err == nil ||
+		!strings.Contains(err.Error(), "list/view rules") {
+		t.Fatalf("want view-rule error, got %v", err)
+	}
+}
+
+func TestEnsureMediaCollectionConvergesUnprotectedCollection(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatalf("NewTestApp: %v", err)
+	}
+	t.Cleanup(app.Cleanup)
+
+	users := core.NewAuthCollection("syncusers")
+	if err := app.Save(users); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a collection created before the Protected/rule hardening.
+	col := core.NewBaseCollection("media")
+	col.Fields.Add(&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true})
+	col.Fields.Add(&core.TextField{Name: mediaSHAField})
+	col.Fields.Add(&core.NumberField{Name: mediaSizeField, OnlyInt: true})
+	col.Fields.Add(&core.TextField{Name: mediaMimeField})
+	col.Fields.Add(&core.TextField{Name: mediaNameField})
+	col.Fields.Add(&core.FileField{Name: mediaFileField, MaxSelect: 1})
+	col.Fields.Add(&core.FileField{Name: mediaPosterField, MaxSelect: 1})
+	col.Fields.Add(&core.RelationField{Name: mediaOwnerField, CollectionId: users.Id, MaxSelect: 1})
+	if err := app.Save(col); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := EnsureMediaCollection(app, "media", users.Id, 0, 0); err != nil {
+		t.Fatalf("converge: %v", err)
+	}
+	got, err := app.FindCollectionByNameOrId("media")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{mediaFileField, mediaPosterField} {
+		if f, ok := got.Fields.GetByName(name).(*core.FileField); !ok || !f.Protected {
+			t.Fatalf("field %q was not converged to Protected", name)
+		}
+	}
+	if got.ViewRule == nil || *got.ViewRule != mediaViewRule {
+		t.Fatalf("view rule was not converged: %v", got.ViewRule)
+	}
+	// A custom (non-nil) rule is preserved.
+	custom := "owner = @request.auth.id && size > 0"
+	got.ViewRule = &custom
+	if err := app.Save(got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureMediaCollection(app, "media", users.Id, 0, 0); err != nil {
+		t.Fatalf("converge custom: %v", err)
+	}
+	again, _ := app.FindCollectionByNameOrId("media")
+	if again.ViewRule == nil || *again.ViewRule != custom {
+		t.Fatalf("custom view rule overwritten: %v", again.ViewRule)
+	}
 }

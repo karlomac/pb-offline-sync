@@ -91,3 +91,44 @@ func TestConfigFromEnvRejectsBadValues(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigFromEnvMediaDisabledByDefault(t *testing.T) {
+	cfg, _, err := configFromEnv(getter(map[string]string{"SYNC_COLLECTIONS": "notes"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Media != nil {
+		t.Fatalf("media must stay disabled without SYNC_MEDIA_COLLECTION: %+v", cfg.Media)
+	}
+}
+
+func TestConfigFromEnvMediaWiring(t *testing.T) {
+	cfg, enabled, err := configFromEnv(getter(map[string]string{
+		"SYNC_COLLECTIONS":         "notes",
+		"SYNC_MEDIA_COLLECTION":    "photos",
+		"SYNC_MEDIA_MAX_FILE_BYTES": "1048576",
+		"SYNC_MEDIA_PER_USER_QUOTA": "5242880",
+	}))
+	if err != nil || !enabled {
+		t.Fatalf("enabled=%v err=%v", enabled, err)
+	}
+	if cfg.Media == nil {
+		t.Fatal("media config not built")
+	}
+	if cfg.Media.Collection != "photos" || cfg.Media.MaxFileSize != 1048576 || cfg.Media.PerUserQuota != 5242880 {
+		t.Fatalf("media config: %+v", cfg.Media)
+	}
+	// The media collection is auto-registered as synced (§18.1).
+	if _, ok := cfg.Collections["photos"]; !ok {
+		t.Fatal("media collection not added to the synced set")
+	}
+
+	// Invalid numeric values fail fast instead of silently disabling a limit.
+	if _, _, err := configFromEnv(getter(map[string]string{
+		"SYNC_COLLECTIONS":      "notes",
+		"SYNC_MEDIA_COLLECTION": "photos",
+		"SYNC_MEDIA_MAX_FILE_BYTES": "lots",
+	})); err == nil {
+		t.Fatal("expected an error for a non-numeric media limit")
+	}
+}

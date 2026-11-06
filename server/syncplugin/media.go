@@ -62,19 +62,28 @@ var (
 	tusCTType = "application/offset+octet-stream"
 )
 
-// EnsureMediaCollection provisions the media collection with the fixed field
-// set of protocol §18.1 (operator convenience: the plugin only validates, so a
-// host app calls this in its migrations before registering the plugin).
-// EnsureMediaCollection provisions the media collection with the fixed field
-// set of protocol §18.1 (operator convenience: the plugin only validates, so a
-// host app calls this in its migrations before registering the plugin).
+// mediaViewRule scopes media records (and therefore their files) to the owner.
+// PocketBase serves a file only when the field is Protected and the record
+// passes the collection's ViewRule (§18.6), so this rule is required for owners
+// to download their own media and for everyone else to be refused.
+const mediaViewRule = mediaOwnerField + " = @request.auth.id"
+
+// EnsureMediaCollection provisions or converges the media collection with the
+// fixed field set of protocol §18.1. It is idempotent and safe to call on every
+// boot: an existing collection gets the security-relevant parts converged
+// (file fields marked Protected, owner-scoped list/view rules when unset) while
+// operator-set custom rules are left alone (validateMediaCollection then
+// rejects anything unsafe).
+//
 // A non-positive fileMax/posterMax means "no explicit cap" (1 TiB) for the file
 // field; posterMax should otherwise be MediaConfig.PosterMaxBytes.
 func EnsureMediaCollection(app core.App, name, authCollectionOrID string, maxFileSize, posterMax int64) (*core.Collection, error) {
-	if col, err := app.FindCollectionByNameOrId(name); err == nil {
-		return col, nil
+	col, err := app.FindCollectionByNameOrId(name)
+	if err == nil {
+		return convergeMediaCollection(app, col)
 	}
-	col := core.NewBaseCollection(name)
+
+	col = core.NewBaseCollection(name)
 	// created/updated are not automatic in PB; MediaGC orders on `updated`.
 	col.Fields.Add(&core.AutodateField{Name: "created", OnCreate: true, OnUpdate: false})
 	col.Fields.Add(&core.AutodateField{Name: "updated", OnCreate: true, OnUpdate: true})
@@ -86,16 +95,50 @@ func EnsureMediaCollection(app core.App, name, authCollectionOrID string, maxFil
 	if fileMax <= 0 {
 		fileMax = 1 << 40
 	}
-	col.Fields.Add(&core.FileField{Name: mediaFileField, MaxSelect: 1, MaxSize: fileMax})
+	col.Fields.Add(&core.FileField{Name: mediaFileField, MaxSelect: 1, MaxSize: fileMax, Protected: true})
 	if posterMax <= 0 {
 		posterMax = posterMaxBytes
 	}
-	col.Fields.Add(&core.FileField{Name: mediaPosterField, MaxSelect: 1, MaxSize: posterMax})
+	col.Fields.Add(&core.FileField{Name: mediaPosterField, MaxSelect: 1, MaxSize: posterMax, Protected: true})
 	col.Fields.Add(&core.RelationField{Name: mediaOwnerField, CollectionId: authCollectionOrID, MaxSelect: 1})
+	// Write rules stay locked (nil = superuser only); records are server-created
+	// (§18.1) and push mutations are rejected with media_immutable.
+	viewRule := mediaViewRule
+	col.ListRule = &viewRule
+	col.ViewRule = &viewRule
 	if err := app.Save(col); err != nil {
 		return nil, err
 	}
 	return app.FindCollectionByNameOrId(name)
+}
+
+// convergeMediaCollection upgrades a pre-existing media collection to the
+// §18.1 security requirements without touching custom rules.
+func convergeMediaCollection(app core.App, col *core.Collection) (*core.Collection, error) {
+	changed := false
+	for _, fieldName := range []string{mediaFileField, mediaPosterField} {
+		if f, ok := col.Fields.GetByName(fieldName).(*core.FileField); ok && !f.Protected {
+			f.Protected = true
+			changed = true
+		}
+	}
+	if col.ListRule == nil {
+		viewRule := mediaViewRule
+		col.ListRule = &viewRule
+		changed = true
+	}
+	if col.ViewRule == nil {
+		viewRule := mediaViewRule
+		col.ViewRule = &viewRule
+		changed = true
+	}
+	if !changed {
+		return col, nil
+	}
+	if err := app.Save(col); err != nil {
+		return nil, err
+	}
+	return app.FindCollectionByNameOrId(col.Name)
 }
 
 func (mc *MediaConfig) mimeAllowed(mime string) bool {

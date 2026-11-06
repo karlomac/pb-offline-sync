@@ -18,6 +18,14 @@
 //	SYNC_CHANGELOG_RETENTION_DAYS    change-log retention (default 30)
 //	SYNC_PRUNE_CRON                  cron expr for retention pruning
 //	                                 (default "0 3 * * *"; empty disables)
+//	SYNC_MEDIA_COLLECTION            media collection name; empty disables media
+//	                                 (see docs/protocol.md §18 for the required
+//	                                 Protected file fields and owner-scoped rules)
+//	SYNC_MEDIA_MAX_FILE_BYTES        media max file size in bytes (default 0 = unlimited)
+//	SYNC_MEDIA_PER_USER_QUOTA        media per-user quota in bytes (default 0 = unlimited)
+//	SYNC_MEDIA_MIME_ALLOWLIST        comma-separated exact MIME types or "type/" prefixes
+//	                                 (default: image/, video/, audio/; text/html and
+//	                                 image/svg+xml are always denied)
 //
 // Every collection named in SYNC_COLLECTIONS must exist and have the owner
 // field as a relation to an auth collection, or the server refuses to start
@@ -131,7 +139,42 @@ func configFromEnv(get func(string) string) (syncplugin.Config, bool, error) {
 		cfg.ChangeLogRetention = time.Duration(days) * 24 * time.Hour
 	}
 
+	if cfg.Media, err = mediaFromEnv(get, cfg.Collections); err != nil {
+		return syncplugin.Config{}, false, err
+	}
+
 	return cfg, true, nil
+}
+
+// mediaFromEnv builds the optional media config. An empty media collection name
+// disables the feature; the collection itself is provisioned by the operator
+// (or the host app via syncplugin.EnsureMediaCollection) and validated at boot.
+func mediaFromEnv(get func(string) string, collections map[string]syncplugin.CollectionConfig) (*syncplugin.MediaConfig, error) {
+	name := strings.TrimSpace(get("SYNC_MEDIA_COLLECTION"))
+	if name == "" {
+		return nil, nil
+	}
+	mc := &syncplugin.MediaConfig{
+		Collection:    name,
+		MimeAllowlist: splitList(get("SYNC_MEDIA_MIME_ALLOWLIST")),
+	}
+	maxFileSize, err := envInt64(get, "SYNC_MEDIA_MAX_FILE_BYTES")
+	if err != nil {
+		return nil, err
+	}
+	quota, err := envInt64(get, "SYNC_MEDIA_PER_USER_QUOTA")
+	if err != nil {
+		return nil, err
+	}
+	mc.MaxFileSize = maxFileSize
+	mc.PerUserQuota = quota
+
+	// The media collection is a synced collection (§18.1); main.go owns the
+	// defaults wiring, so register it when the operator has not listed it.
+	if _, ok := collections[name]; !ok {
+		collections[name] = syncplugin.CollectionConfig{OwnerField: "owner"}
+	}
+	return mc, nil
 }
 
 func splitList(v string) []string {
