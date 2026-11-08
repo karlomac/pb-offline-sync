@@ -792,6 +792,22 @@ cd client/adapter-expo-sqlite  && pnpm install && pnpm run typecheck && pnpm tes
 Both sides validate the same `conformance/` fixtures; a green run on both means
 they agree with `docs/protocol.md`. The server also has a randomized
 multi-device convergence harness: `go test ./syncplugin/ -run Convergence -count=5`.
+
+### Full end-to-end run on a blank Ubuntu 22.04 VPS
+
+`e2e/bootstrap.sh` installs the pinned toolchain (Go 1.27, Node 22, pnpm, k6,
+sqlite3), builds the server, provisions a disposable schema, and runs the
+scenarios from [`docs/e2e-replication-test-plan.md`](docs/e2e-replication-test-plan.md):
+
+```bash
+git clone -b staging https://github.com/karlomac/pb-offline-sync.git
+cd pb-offline-sync
+sudo ./e2e/bootstrap.sh            # add --skip-install to reuse an existing toolchain
+```
+
+Artifacts (phase logs, k6 summary, server logs, versions) land in
+`/tmp/pb-e2e/artifacts/<timestamp>/`; the script exits non-zero if any phase
+fails. It binds loopback only and wipes its data dir afterwards.
 See `docs/test-scenarios.md` for the full scenario catalog and known gaps.
 
 ## Releases
