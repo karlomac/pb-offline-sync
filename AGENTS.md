@@ -32,6 +32,13 @@ the frozen v1.0 contract and the source of truth; code follows it.
 - `docs/media-sync-plan.md` — photo/video sync. Shipped on `staging` as the
   additive protocol v1.1 extension (`docs/protocol.md` §18); still under test,
   not in production.
+- `docs/media-download-design.md` — proposal for downloading/storing media
+  on-device (offline playback). Not implemented; code freeze until the current
+  staging E2E and production validation finish.
+- `docs/e2e-replication-test-plan.md` — the end-to-end, media, auth, failure and
+  load plan; `e2e/bootstrap.sh` runs it autonomously.
+- `docs/pocketbase-upgrade.md` — how the PocketBase/Go pins work and the upgrade
+  runbook for maintainers and forks.
 
 ## Repository layout
 
@@ -59,8 +66,9 @@ packages you touched.
 
 ## Pinned versions
 
-- **PocketBase:** `v0.40.5` (verify a supported range before widening; check the
-  upstream changelog before using any API outside it).
+- **PocketBase:** `v0.40.6` (verify a supported range before widening; check the
+  upstream changelog before using any API outside it). Upgrade procedure:
+  `docs/pocketbase-upgrade.md`.
 - **Go:** 1.27.x (module `github.com/karlomac/pb-offline-sync/server`).
 - **Node:** 22.x.
 
