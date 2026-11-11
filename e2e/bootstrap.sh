@@ -14,6 +14,14 @@
 #   --soak-seconds 0      extra soak duration in seconds (0 = none)
 #   --load-users 50       users for the load phase (default 50)
 #   --port 8090           loopback port (first free in 8090..8099 is used)
+#   --remote URL          run against an already-deployed instance instead of
+#                         building/starting a local one. Skips install/L0/L1,
+#                         provisions by default (see --no-provision) and runs
+#                         the live suites (and k6 if not --skip-load).
+#                         Admin creds come from E2E_ADMIN_EMAIL/E2E_ADMIN_PASSWORD.
+#   --no-provision        with --remote: do not touch the remote schema/users
+#   --skip-auth           with --remote: skip the auth-gate suite (it needs a
+#                         Turnstile verifier reachable from the server over https)
 #   --dir PATH            work dir (default /tmp/pb-e2e)
 #   --keep                keep the provisioned data dir after the run
 #   --dev                 enable PocketBase dev mode (SQL logging) for debugging;
@@ -36,6 +44,9 @@ SOAK_SECONDS=0
 LOAD_USERS=50
 KEEP=0
 DEV=0
+REMOTE_URL=""
+NO_PROVISION=0
+SKIP_AUTH=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,6 +61,9 @@ while [ $# -gt 0 ]; do
     --dir) WORK="$2"; shift ;;
     --keep) KEEP=1 ;;
     --dev) DEV=1 ;;
+    --remote) REMOTE_URL="${2%/}"; shift ;;
+    --no-provision) NO_PROVISION=1 ;;
+    --skip-auth) SKIP_AUTH=1 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -148,6 +162,15 @@ ensure_k6() {
   as_root install "/tmp/k6-v2.3.0-linux-${arch}/k6" /usr/local/bin/k6
 }
 
+if [ -n "$REMOTE_URL" ]; then
+  case "$REMOTE_URL" in
+    http://*|https://*) : ;;
+    *) echo "bootstrap: --remote must be an http(s) URL" >&2; exit 2 ;;
+  esac
+  SKIP_INSTALL=1
+  BASE="$REMOTE_URL"
+fi
+
 if [ "$SKIP_INSTALL" = "0" ]; then
   log "installing base packages"
   run_step "install packages" install_packages
@@ -175,11 +198,15 @@ fi
   sqlite3 --version 2>/dev/null || true
 } | tee "$ART/versions.txt" >/dev/null
 
-# Pick the first free loopback port in 8090..8099.
-port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-for p in $(seq 8090 8099); do if ! port_in_use "$p"; then PORT="$p"; break; fi; done
-BASE="http://127.0.0.1:$PORT"
-echo "port: $PORT" >> "$ART/versions.txt"
+if [ -z "$REMOTE_URL" ]; then
+  # Pick the first free loopback port in 8090..8099.
+  port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+  for p in $(seq 8090 8099); do if ! port_in_use "$p"; then PORT="$p"; break; fi; done
+  BASE="http://127.0.0.1:$PORT"
+  echo "port: $PORT" >> "$ART/versions.txt"
+else
+  echo "remote: $BASE" >> "$ART/versions.txt"
+fi
 
 # ---------------------------------------------------------------- L0 / L1
 
@@ -270,20 +297,13 @@ phase_auth() {
   kill "$STUB_PID" 2>/dev/null || true; STUB_PID=""
 }
 
-phase_load() {
-  log "L4: load (${LOAD_DURATION}) and soak (${SOAK_SECONDS}s)"
-  start_server RC-B || return 1
-  if ! command -v k6 >/dev/null 2>&1; then
-    fail "k6 is not installed (rerun without --skip-install, or install k6)"
-    stop_server; return 1
-  fi
-  # Latency budgets are reported, not fatal: a slow host is not a correctness
-  # failure (see the plan). Only transport errors/missing results fail the phase.
-  run_k6() { # $1 = summary file, $2 = duration, $3 = vus
-    E2E_BASE_URL="$BASE" E2E_LOAD_USERS="$LOAD_USERS" E2E_DURATION="$2" E2E_VUS="$3" \
-      k6 run --summary-export "$1" "$ROOT/e2e/load.k6.js" >>"$ART/k6.log" 2>&1 || true
-    [ -f "$1" ] || { echo "k6 produced no summary"; return 1; }
-    python3 - "$1" <<'PYEOF'
+# Latency budgets are reported, not fatal: a slow host is not a correctness
+# failure (see the plan). Only transport errors/missing results fail the phase.
+run_k6() { # $1 = summary file, $2 = duration, $3 = vus
+  E2E_BASE_URL="$BASE" E2E_LOAD_USERS="$LOAD_USERS" E2E_DURATION="$2" E2E_VUS="$3" \
+    k6 run --summary-export "$1" "$ROOT/e2e/load.k6.js" >>"$ART/k6.log" 2>&1 || true
+  [ -f "$1" ] || { echo "k6 produced no summary"; return 1; }
+  python3 - "$1" <<'PYEOF'
 import json, sys
 d = json.load(open(sys.argv[1]))
 m = d.get("metrics", {})
@@ -296,7 +316,49 @@ print(f"requests={reqs:.0f} failed_rate={failed:.5f} "
       f"p95={dur.get('p(95)')}ms push_p95={push.get('p(95)')}ms pull_p95={pull.get('p(95)')}ms")
 sys.exit(0 if reqs > 0 and failed < 0.001 else 1)
 PYEOF
-  }
+}
+
+remote_provision() {
+  if [ -z "${E2E_ADMIN_EMAIL:-}" ] || [ -z "${E2E_ADMIN_PASSWORD:-}" ]; then
+    echo "set E2E_ADMIN_EMAIL and E2E_ADMIN_PASSWORD for --remote provisioning" >&2
+    return 1
+  fi
+  echo "WARNING: provisioning mutates the remote test instance (creates collections, sets users.createRule/authRule)." >&2
+  E2E_BASE_URL="$BASE" E2E_LOAD_USERS="$LOAD_USERS" node "$ROOT/e2e/provision.mjs"
+}
+
+remote_sync_media() {
+  ( cd "$ROOT/client/transport-pocketbase" && \
+    E2E_BASE_URL="$BASE" pnpm vitest run tests/e2e.replication.test.ts )
+}
+
+remote_auth() {
+  ( cd "$ROOT/client/transport-pocketbase" && \
+    E2E_BASE_URL="$BASE" \
+    E2E_ADMIN_EMAIL="${E2E_ADMIN_EMAIL:-}" E2E_ADMIN_PASSWORD="${E2E_ADMIN_PASSWORD:-}" \
+    pnpm vitest run tests/e2e.auth.test.ts )
+}
+
+remote_load() {
+  log "L4: remote load (${LOAD_DURATION}) and soak (${SOAK_SECONDS}s) from this host"
+  if ! command -v k6 >/dev/null 2>&1; then
+    fail "k6 is not installed (install it, or use --skip-load)"
+    return 1
+  fi
+  run_k6 "$ART/k6-summary.json" "$LOAD_DURATION" 25 || return 1
+  if [ "$SOAK_SECONDS" -gt 0 ]; then
+    run_k6 "$ART/k6-soak-summary.json" "${SOAK_SECONDS}s" 5 || return 1
+  fi
+  echo "remote run: server DB/RSS metrics unavailable (use a co-located runner for capacity numbers)" >> "$ART/metrics.txt"
+}
+
+phase_load() {
+  log "L4: load (${LOAD_DURATION}) and soak (${SOAK_SECONDS}s)"
+  start_server RC-B || return 1
+  if ! command -v k6 >/dev/null 2>&1; then
+    fail "k6 is not installed (rerun without --skip-install, or install k6)"
+    stop_server; return 1
+  fi
   run_k6 "$ART/k6-summary.json" "$LOAD_DURATION" 25 || { stop_server; return 1; }
   if [ "$SOAK_SECONDS" -gt 0 ]; then
     run_k6 "$ART/k6-soak-summary.json" "${SOAK_SECONDS}s" 5 || { stop_server; return 1; }
@@ -315,6 +377,31 @@ PYEOF
 # ---------------------------------------------------------------- main
 
 log "bootstrap: $ROOT @ $(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+
+if [ -n "$REMOTE_URL" ]; then
+  log "remote mode: $BASE (local build/tests skipped)"
+  if [ "$NO_PROVISION" = "0" ]; then
+    run_step "provision remote schema" remote_provision
+  else
+    log "remote provisioning skipped (--no-provision)"
+  fi
+  run_step "L3 sync+media (remote)" remote_sync_media
+  if [ "$SKIP_AUTH" = "0" ]; then
+    run_step "L3 auth gate (remote)" remote_auth
+  else
+    log "remote auth gate skipped (--skip-auth)"
+  fi
+  if [ "$SKIP_LOAD" = "0" ]; then
+    run_step "L4 load (remote, WAN)" remote_load
+  else
+    log "remote load skipped (--skip-load)"
+  fi
+  log "summary complete"
+  echo
+  echo "summary:   $SUMMARY"
+  echo "artifacts: $ART"
+  if [ "$FAILED" = "0" ]; then echo "RESULT: PASS"; exit 0; else echo "RESULT: FAIL"; exit 1; fi
+fi
 
 run_step "L0 build/vet/test" phase_l0
 run_step "L1 client suites" phase_l1

@@ -167,6 +167,36 @@ e2e/up.sh RC-B         # start with RC-B env, wait for /api/health
 
 Reset: `e2e/down.sh --purge` stops the process and deletes `/tmp/pb-e2e`.
 
+### 4.3 Remote run against a deployed instance (e.g. Dokploy)
+
+```bash
+E2E_ADMIN_EMAIL=... E2E_ADMIN_PASSWORD=... \
+  ./e2e/bootstrap.sh --remote https://test-app.example
+```
+
+- Skips install/local build/L0/L1; provisions the remote schema (unless
+  `--no-provision`), then runs the live sync/media and auth suites against the
+  deployed instance.
+- Provisioning **mutates** the target (creates `notes`/`media`, sets
+  `users.createRule`/`authRule`). Use a test instance only. For the first
+  provision, deploy with `SYNC_*`/`AUTH_*` unset, run the remote command with
+  `--no-provision` after the plugin-enabled redeploy, or provision once with the
+  plain instance.
+- The auth suite needs a Turnstile verifier the **server** can reach over
+  **https** (plain `http` is allowed only for loopback); deploy the stub behind a
+  Dokploy domain, or pass `--skip-auth`.
+- Load run from the operator's machine measures the WAN (e.g. Germany → Singapore
+  ≈ 200 ms RTT) — use `--skip-load` for correctness-only runs, or run k6
+  co-located with the app for capacity numbers.
+- Both suites are rerun-safe against a persistent instance (run-scoped record ids
+  and media content).
+- Configure S3/R2 in PocketBase settings before the run and keep the bucket
+  private.
+
+Operational note: PocketBase has no switch to disable the admin UI. Restrict it
+with `superuserIps` (Settings → superusers IPs) and/or a proxy rule that blocks
+`/_/` on test deployments.
+
 ---
 
 ## 5. L2 — live smoke
