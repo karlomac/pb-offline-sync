@@ -63,6 +63,19 @@ FAILED=0
 SERVER_PID=""
 STUB_PID=""
 
+# All phases write under $WORK: create the work dir, artifact dir and data dir
+# up front. The first log line writes $SUMMARY, and the install phase runs before
+# anything else on a fresh host, so this must happen before any logging.
+if ! mkdir -p "$WORK" "$ART" "$DATA"; then
+  echo "bootstrap: cannot create work directories under $WORK" >&2
+  exit 1
+fi
+if [ ! -w "$ART" ] || [ ! -w "$DATA" ]; then
+  echo "bootstrap: work directories under $WORK are not writable" >&2
+  exit 1
+fi
+export WORK ART DATA SUMMARY
+
 log()  { printf '\n=== %s\n' "$*" | tee -a "$SUMMARY"; }
 pass() { printf 'PASS  %s\n' "$*" | tee -a "$SUMMARY"; }
 fail() { printf 'FAIL  %s\n' "$*" | tee -a "$SUMMARY"; FAILED=1; }
@@ -145,7 +158,6 @@ else
   fi
 fi
 
-mkdir -p "$WORK" "$ART"
 {
   echo "root: $ROOT"
   echo "work: $WORK"
