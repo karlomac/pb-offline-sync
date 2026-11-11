@@ -83,7 +83,13 @@ async function pushRaw(token: string, mutations: unknown[]) {
 }
 
 function bytes(fill: number, size: number): Uint8Array {
-  return new Uint8Array(size).fill(fill);
+  const data = new Uint8Array(size).fill(fill);
+  // Run-scoped prefix: fixed patterns would dedup against blobs uploaded by a
+  // previous run against the same (remote, persistent) instance, breaking tests
+  // such as the resume scenario that expect a fresh upload session.
+  const tag = new TextEncoder().encode(`e2e:${RUN}:${fill}:`);
+  data.set(tag.subarray(0, Math.min(tag.length, size)), 0);
+  return data;
 }
 
 function sha(data: Uint8Array): string {
