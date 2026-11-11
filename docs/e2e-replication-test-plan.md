@@ -17,7 +17,8 @@ sync/media suite, the auth-gate suite and the load/soak phase. It binds
 `127.0.0.1` only, uses `/tmp/pb-e2e`, writes `artifacts/<timestamp>/`, and exits
 non-zero if any phase fails. Useful flags: `--skip-install` (reuse the
 toolchain), `--skip-load`, `--skip-vuln`, `--race`, `--load-duration 2m`,
-`--soak-seconds 3600`, `--load-users 50`, `--keep`.
+`--soak-seconds 3600`, `--load-users 50`, `--keep`, `--dev` (verbose PocketBase
+dev mode — off by default so the run matches production behaviour).
 
 ---
 
@@ -265,6 +266,10 @@ in `fail` or `hostname` mode through `/mode?value=`.
 
 OAuth2 live signup is provider-dependent and therefore **not** in this plan; the
 gate's OAuth context is covered by `TestSignupThroughRouter` and the unit suite.
+
+Without `--dev` and without SMTP, the verification send fails asynchronously and
+is logged (`failed to send verification email`); the signup itself still succeeds
+and the suite verifies the account through the admin API, not the mailbox.
 
 ---
 

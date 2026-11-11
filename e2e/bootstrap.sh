@@ -16,6 +16,8 @@
 #   --port 8090           loopback port (first free in 8090..8099 is used)
 #   --dir PATH            work dir (default /tmp/pb-e2e)
 #   --keep                keep the provisioned data dir after the run
+#   --dev                 enable PocketBase dev mode (SQL logging) for debugging;
+#                         off by default because it distorts load measurements
 #
 # Exit code: 0 only when every executed phase passed. Artifacts are written to
 # <dir>/artifacts/<timestamp>/ (summary.txt, phase logs, server logs, versions).
@@ -33,6 +35,7 @@ LOAD_DURATION="2m"
 SOAK_SECONDS=0
 LOAD_USERS=50
 KEEP=0
+DEV=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -46,6 +49,7 @@ while [ $# -gt 0 ]; do
     --port) PORT="$2"; shift ;;
     --dir) WORK="$2"; shift ;;
     --keep) KEEP=1 ;;
+    --dev) DEV=1 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -226,7 +230,9 @@ start_server() { # $1 = plain|RC-B|RC-C ; logs to $ART/server-$1.log
                 AUTH_DISPOSABLE_DOMAINS=mailinator.com) ;;
     *) echo "unknown mode $mode" >&2; return 1 ;;
   esac
-  env "${vars[@]}" "$BIN" serve --http="127.0.0.1:${PORT}" --dir="$DATA" --dev \
+  local devflag=()
+  [ "$DEV" = "1" ] && devflag=(--dev)
+  env "${vars[@]}" "$BIN" serve --http="127.0.0.1:${PORT}" --dir="$DATA" "${devflag[@]}" \
     >>"$ART/server-$mode.log" 2>&1 &
   SERVER_PID=$!
   wait_health
@@ -299,6 +305,8 @@ PYEOF
     echo "--- server metrics"
     ps -o rss=,pcpu= -p "$SERVER_PID" 2>/dev/null || true
     ls -lh "$DATA"/data.db* 2>/dev/null || true
+    echo "--- log sizes"
+    ls -lh "$ART"/server-*.log 2>/dev/null || true
     sqlite3 "$DATA/data.db" 'select (select count(*) from sync_changes) as changes, (select count(*) from sync_meta) as meta, (select count(*) from sync_processed) as processed, (select count(*) from sync_conflicts) as conflicts;' 2>/dev/null || true
   } >> "$ART/metrics.txt"
   stop_server
