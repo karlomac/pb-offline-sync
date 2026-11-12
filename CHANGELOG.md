@@ -10,6 +10,53 @@ changes.
 
 _Nothing yet._
 
+## [0.2.0] - 2026-11-12
+
+### Added
+
+- **Media sync** as an additive protocol v1.1 extension (`docs/protocol.md` §18):
+  resumable upload channel (`init`/tus-core `HEAD`/`PATCH`/`DELETE`/`commit`),
+  per-user content-hash dedup, quotas and session limits, staging sweep and
+  refcount GC, server-created immutable media records, and protected file
+  serving with owner-scoped rules.
+- **Optional auth signup gate** (`server/authplugin`): Turnstile-gated password
+  signup, OAuth2 signup enablement, allow/disposable email-domain rules, and a
+  verification requirement enforced at boot.
+- **End-to-end test tooling**: `e2e/bootstrap.sh` (local and `--remote`),
+  live replication/media/auth suites, k6 load/soak, an executable test plan,
+  and a security-audit report with per-finding remediation.
+- **Docs**: media download/on-device storage design (proposal), PocketBase/Go
+  upgrade runbook for maintainers and forks.
+
+### Changed
+
+- PocketBase pinned to **v0.40.6** (thumbnail memory-limit and fileblob escape
+  fixes) and `golang.org/x/net` to **v0.62.0** (GO-2026-6860); Go 1.27.x.
+- CI hardened: least-privilege permissions, SHA-pinned actions, digest-pinned
+  base images, `govulncheck` and `pnpm audit --prod`.
+- Container/deploy: media and auth env wiring, `PB_ENCRYPTION_KEY`
+  (`--encryptionEnv`), `/pb` data-dir validation, explicit compose environment
+  (no `.env` on Dokploy), and removal of the default admin password.
+- The binary now schedules media staging sweep (30 min) and GC (nightly) when
+  media is enabled; pruning also covers conflict diagnostics.
+
+### Fixed
+
+- Security: media bytes are no longer publicly readable by URL (Protected fields,
+  owner-scoped list/view rules, boot validation); media records are immutable via
+  push; relation targets are constrained to the caller's records; quota and
+  session accounting cover partial uploads; client loops and unvalidated server
+  values are guarded.
+- Cross-user isolation retained for records, files, sessions and relations.
+- Bootstrap works on a fresh host (work dirs created before logging), supports
+  remote runs, and no longer uses PocketBase dev mode by default.
+- `TestResyncOn410AfterPrune` is deterministic (ms-precision timestamp race).
+
+### Security
+
+- See `docs/security-audit-2026-10-29.md`; all audited media/auth findings are
+  addressed and tracked. Residual follow-up: CI secret scanning.
+
 ## [0.1.0-rc.2] - 2026-10-22
 
 ### Fixed

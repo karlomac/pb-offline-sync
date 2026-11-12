@@ -1,6 +1,6 @@
 # pb-offline-sync Protocol Specification
 
-**Protocol version:** 1 · **Status:** Frozen (v1.0) · **Companion to:** `pb-offline-sync-PDD.md`
+**Protocol version:** 1 · **Status:** Frozen (v1.0; v1.1 adds the additive media extension) · **Companion to:** `pb-offline-sync-PDD.md`
 
 This document is the source of truth for the wire protocol between a sync **client** (local database + outbox) and a sync **server** (PocketBase with the pb-offline-sync plugin). Server and client implementations MUST be able to interoperate using only this document and the fixtures in `conformance/`.
 
