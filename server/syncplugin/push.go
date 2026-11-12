@@ -209,6 +209,11 @@ func applyMutation(app core.App, cfg Config, uid string, m pushMutation, depFail
 	if !ok {
 		return rejectedOutcome(m.ID, codeCollectionNotSynced), nil
 	}
+	// Media records are immutable and server-created (protocol §18.1): push
+	// never creates, updates or deletes them.
+	if cfg.Media != nil && m.Collection == cfg.Media.Collection {
+		return rejectedOutcome(m.ID, codeMediaImmutable), nil
+	}
 	col, err := app.FindCollectionByNameOrId(m.Collection)
 	if err != nil {
 		return rejectedOutcome(m.ID, codeCollectionNotSynced), nil
@@ -238,6 +243,12 @@ func applyMutation(app core.App, cfg Config, uid string, m pushMutation, depFail
 	fields, err := decodeFields(m.Fields)
 	if err != nil {
 		return rejectedOutcome(m.ID, codeValidationFailed), nil
+	}
+	// Relations must target the caller's own records (§14.6): otherwise a
+	// relation id forms a cross-user existence oracle and can pin another
+	// user's media against MediaGC (audit M-4).
+	if code := validateRelationOwners(app, cfg, col, fields, uid); code != "" {
+		return rejectedOutcome(m.ID, code), nil
 	}
 
 	switch m.Op {
@@ -713,6 +724,60 @@ func changedUnion(app core.App, collection, recordID string, baseRev, curRev int
 		out = append(out, n)
 	}
 	return out, len(seen) == curRev-baseRev, nil
+}
+
+// validateRelationOwners rejects relation values that point at a record owned by
+// another user in a synced collection. Targets in non-synced collections have
+// no ownership model, so they are left to PocketBase's existence validation.
+func validateRelationOwners(app core.App, cfg Config, col *core.Collection, fields map[string]any, uid string) string {
+	for name, value := range fields {
+		rf, ok := col.Fields.GetByName(name).(*core.RelationField)
+		if !ok {
+			continue
+		}
+		ids := relationFieldIDs(value)
+		if len(ids) == 0 {
+			continue
+		}
+		target, err := app.FindCollectionByNameOrId(rf.CollectionId)
+		if err != nil {
+			return codeValidationFailed
+		}
+		cc, synced := cfg.Collections[target.Name]
+		if !synced {
+			continue
+		}
+		for _, id := range ids {
+			rec, err := app.FindRecordById(target.Name, id)
+			if err != nil {
+				return codeValidationFailed // PocketBase would reject it too
+			}
+			if ownerOf(rec, cc.OwnerField) != uid {
+				return codeValidationFailed
+			}
+		}
+	}
+	return ""
+}
+
+func relationFieldIDs(v any) []string {
+	switch val := v.(type) {
+	case string:
+		if val != "" {
+			return []string{val}
+		}
+	case []string:
+		return val
+	case []any:
+		out := make([]string, 0, len(val))
+		for _, item := range val {
+			if id, ok := item.(string); ok && id != "" {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // ---- small helpers ----

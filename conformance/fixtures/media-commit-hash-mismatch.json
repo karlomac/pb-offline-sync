@@ -1,0 +1,21 @@
+{
+  "name": "media-commit-hash-mismatch",
+  "description": "Staged bytes whose server-recomputed sha256 differs from the declared hash are rejected and staged bytes discarded (§18.4).",
+  "config": { "media": { "collection": "media" } },
+  "blobs": { "a": "hello world", "b": "goodbye!" },
+  "users": ["alice"],
+  "steps": [
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:b", "mime": "image/png", "filename": "b.png" } },
+      "expect": { "status": "upload", "uploadId": "$string" } },
+    { "as": "alice",
+      "media": { "op": "upload", "blob": "b" },
+      "expect": { "status": 204 } },
+    { "as": "alice",
+      "media": { "op": "commit", "request": { "uploadId": "$uploadId" } },
+      "expect": { "status": 400, "code": "hash_mismatch" } },
+    { "as": "alice",
+      "media": { "op": "commit", "request": { "uploadId": "$uploadId" } },
+      "expect": { "status": 404, "code": "upload_not_found" } }
+  ]
+}

@@ -1,6 +1,9 @@
 package syncplugin
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -18,16 +22,24 @@ import (
 
 // Fixture execution driver (protocol §15, E2E-1 / S-CONV-8).
 //
-// conformance_test.go only validates that the 24 fixtures are well-formed. This
+// conformance_test.go only validates that every fixture is well-formed. This
 // file replays each fixture's steps against a live test app: a fresh server per
-// fixture, configured from the fixture's own `config`, then the push/pull steps
-// in order with a subset match on `expect`. The TS client suite drives the same
-// fixtures; a green run on both sides means both agree with docs/protocol.md.
+// fixture, configured from the fixture's own `config`, then the push/pull/media
+// steps in order with a subset match on `expect`. The TS client suite drives
+// the same fixtures; a green run on both sides means both agree with
+// docs/protocol.md.
 
 const drvUsersCollection = "syncusers"
 
 type drvConfig struct {
 	Collections map[string]drvCollection `json:"collections"`
+	Media       *drvMedia                `json:"media"`
+}
+
+type drvMedia struct {
+	Collection   string `json:"collection"`
+	MaxFileSize  int64  `json:"maxFileSize"`
+	PerUserQuota int64  `json:"perUserQuota"`
 }
 
 type drvCollection struct {
@@ -105,12 +117,13 @@ func drvRunFixture(t *testing.T, f fixture) {
 	}
 
 	prevCursor := ""
+	ms := drvMediaState{}
 	for i, step := range f.Steps {
 		tok, ok := tokens[step.As]
 		if !ok {
 			t.Fatalf("step %d: unknown user %q", i, step.As)
 		}
-		drvRunStep(t, env, fmt.Sprintf("step %d", i), step, tok, &prevCursor)
+		drvRunStep(t, env, fmt.Sprintf("step %d", i), step, tok, &prevCursor, f, &ms)
 	}
 }
 
@@ -131,10 +144,24 @@ func drvNewEnv(t *testing.T, fc drvConfig) *testEnv {
 	}
 
 	cfg := Config{Collections: make(map[string]CollectionConfig, len(fc.Collections))}
+	if fc.Media != nil {
+		name := fc.Media.Collection
+		if name == "" {
+			name = defaultMediaCollection
+		}
+		cfg.Media = &MediaConfig{
+			Collection:   name,
+			MaxFileSize:  fc.Media.MaxFileSize,
+			PerUserQuota: fc.Media.PerUserQuota,
+		}
+		if _, err := EnsureMediaCollection(app, name, users.Id, fc.Media.MaxFileSize, cfg.Media.PosterMaxBytes); err != nil {
+			t.Fatalf("create media collection: %v", err)
+		}
+	}
 	for name, c := range fc.Collections {
 		col := core.NewBaseCollection(name)
 		for _, f := range c.Fields {
-			col.Fields.Add(drvBuildField(t, f))
+			col.Fields.Add(drvBuildField(t, f, cfg.Media, app))
 		}
 		col.Fields.Add(&core.RelationField{Name: c.OwnerField, CollectionId: users.Id, MaxSelect: 1})
 		if err := app.Save(col); err != nil {
@@ -169,9 +196,10 @@ func drvNewEnv(t *testing.T, fc drvConfig) *testEnv {
 }
 
 // drvBuildField maps a fixture field descriptor to a PocketBase field. The
-// fixtures use text/editor/file only; anything else fails loudly rather than
-// silently changing the schema the fixture was written against.
-func drvBuildField(t *testing.T, f drvField) core.Field {
+// fixtures use text/editor/file/relation only; anything else fails loudly
+// rather than silently changing the schema the fixture was written against.
+// A "relation" field may only target the media collection.
+func drvBuildField(t *testing.T, f drvField, mc *MediaConfig, app core.App) core.Field {
 	t.Helper()
 	switch f.Type {
 	case "text":
@@ -180,17 +208,140 @@ func drvBuildField(t *testing.T, f drvField) core.Field {
 		return &core.EditorField{Name: f.Name}
 	case "file":
 		return &core.FileField{Name: f.Name, MaxSelect: 1}
+	case "relation":
+		if mc == nil {
+			t.Fatalf("fixture driver: relation field %q requires a media config", f.Name)
+		}
+		mediaCol, err := app.FindCollectionByNameOrId(mc.Collection)
+		if err != nil {
+			t.Fatalf("fixture driver: relation field %q: find media collection: %v", f.Name, err)
+		}
+		return &core.RelationField{Name: f.Name, CollectionId: mediaCol.Id, MaxSelect: 1}
 	default:
 		t.Fatalf("fixture driver: unsupported field type %q for %q", f.Type, f.Name)
 		return nil
 	}
 }
 
-func drvRunStep(t *testing.T, env *testEnv, ctx string, step fixtureStep, tok string, prevCursor *string) {
+// drvMediaState is the runner's per-fixture media-channel state: the active
+// session, its bytes offset (mirrored to the server's Upload-Offset), and the
+// last committed media record for the "$mediaId" sentinel.
+type drvMediaState struct {
+	uploadID string
+	offset   int64
+	mediaID  string
+}
+
+// drvSentinels substitutes blob-derived values in a media step's request body:
+// "$sha:<blob>" (hex sha256), "$size:<blob>" (byte length), "$uploadId" and
+// "$mediaId" (runner state). Fixture files never hardcode hashes or ids.
+func drvSentinels(raw []byte, blobs map[string]string, ms *drvMediaState) []byte {
+	for name, content := range blobs {
+		sum := sha256.Sum256([]byte(content))
+		raw = bytes.ReplaceAll(raw, []byte(`"$sha:`+name+`"`), []byte(`"`+hex.EncodeToString(sum[:])+`"`))
+		raw = bytes.ReplaceAll(raw, []byte(`"$size:`+name+`"`), []byte(strconv.Itoa(len(content))))
+	}
+	if ms.uploadID != "" {
+		raw = bytes.ReplaceAll(raw, []byte(`"$uploadId"`), []byte(`"`+ms.uploadID+`"`))
+	}
+	if ms.mediaID != "" {
+		raw = bytes.ReplaceAll(raw, []byte(`"$mediaId"`), []byte(`"`+ms.mediaID+`"`))
+	}
+	return raw
+}
+
+func drvRunMediaStep(t *testing.T, env *testEnv, ctx string, step fixtureStep, tok string, f fixture, ms *drvMediaState) {
 	t.Helper()
 
+	var m fixtureMediaStep
+	if err := json.Unmarshal(step.Media, &m); err != nil {
+		t.Fatalf("%s: invalid media step: %v", ctx, err)
+	}
+
+	switch m.Op {
+	case "init":
+		req := drvSentinels(m.Request, f.Blobs, ms)
+		status, _, body := env.doJSON(http.MethodPost, "/api/sync/media/init", tok, nil, req)
+		if status == http.StatusOK {
+			if id, ok := body["uploadId"].(string); ok {
+				ms.uploadID = id
+				ms.offset = 0
+			}
+			if id, ok := body["mediaId"].(string); ok {
+				ms.mediaID = id
+			}
+		}
+		drvCheck(t, ctx, step.Expect, body, status)
+
+	case "upload":
+		content := []byte(f.Blobs[m.Blob])
+		if len(m.Slice) == 2 {
+			content = content[m.Slice[0]:m.Slice[1]]
+		}
+		headers := map[string]string{
+			"Upload-Offset": strconv.FormatInt(ms.offset, 10),
+			"Content-Type":  tusCTType,
+		}
+		status, _, body := env.doJSON(http.MethodPatch, "/api/sync/media/upload/"+ms.uploadID, tok, headers, content)
+		if status == http.StatusNoContent {
+			ms.offset += int64(len(content))
+		}
+		// The successful upload channel answers with headers and no body.
+		if len(body) == 0 {
+			body = map[string]any{"status": status}
+		}
+		drvCheck(t, ctx, step.Expect, body, status)
+
+	case "offset":
+		status, hdr, body := env.doJSON(http.MethodHead, "/api/sync/media/upload/"+ms.uploadID, tok, nil, nil)
+		if len(body) == 0 {
+			body = map[string]any{"status": status}
+			if n, perr := strconv.ParseInt(hdr.Get("Upload-Offset"), 10, 64); perr == nil {
+				body["uploadOffset"] = n
+			}
+			if n, perr := strconv.ParseInt(hdr.Get("Upload-Length"), 10, 64); perr == nil {
+				body["uploadLength"] = n
+			}
+		}
+		drvCheck(t, ctx, step.Expect, body, status)
+
+	case "commit":
+		req := drvSentinels(m.Request, f.Blobs, ms)
+		status, _, body := env.doJSON(http.MethodPost, "/api/sync/media/commit", tok, nil, req)
+		if status == http.StatusOK {
+			if id, ok := body["mediaId"].(string); ok {
+				ms.mediaID = id
+			}
+		}
+		drvCheck(t, ctx, step.Expect, body, status)
+
+	case "abort":
+		status, _, body := env.doJSON(http.MethodDelete, "/api/sync/media/upload/"+ms.uploadID, tok, nil, nil)
+		if status == http.StatusNoContent {
+			ms.uploadID = ""
+			ms.offset = 0
+		}
+		if len(body) == 0 {
+			body = map[string]any{"status": status}
+		}
+		drvCheck(t, ctx, step.Expect, body, status)
+	}
+}
+
+func drvRunStep(t *testing.T, env *testEnv, ctx string, step fixtureStep, tok string, prevCursor *string, f fixture, ms *drvMediaState) {
+	t.Helper()
+
+	if isSet(step.Media) {
+		drvRunMediaStep(t, env, ctx, step, tok, f, ms)
+		return
+	}
+
 	if isSet(step.Push) {
-		status, body := env.pushRaw(tok, []byte(step.Push), nil)
+		push := []byte(step.Push)
+		if ms.mediaID != "" {
+			push = drvSentinels(push, nil, &drvMediaState{mediaID: ms.mediaID})
+		}
+		status, body := env.pushRaw(tok, push, nil)
 		drvCheck(t, ctx, step.Expect, body, status)
 		return
 	}
@@ -238,10 +389,12 @@ func drvCheck(t *testing.T, ctx string, expect json.RawMessage, body map[string]
 		t.Fatalf("%s: invalid expect: %v", ctx, err)
 	}
 
-	// A request-level expect {status, code} also pins the HTTP status.
+	// A request-level expect {status, code} also pins the HTTP status. Only a
+	// numeric status pins it: the media init/commit responses carry a *body*
+	// status string ("upload"/"ok", protocol §18.2/§18.4).
 	if wm, ok := want.(map[string]any); ok {
 		if ws, present := wm["status"]; present {
-			if wi, ok := drvInt(ws); !ok || wi != status {
+			if wi, ok := drvInt(ws); ok && wi != status {
 				t.Fatalf("%s: HTTP status %d, want %v", ctx, status, ws)
 			}
 		}

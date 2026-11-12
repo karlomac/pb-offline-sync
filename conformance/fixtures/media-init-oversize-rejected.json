@@ -1,0 +1,12 @@
+{
+  "name": "media-init-oversize-rejected",
+  "description": "A declared size above media.maxFileSize is rejected at init, before bytes move (§18.2).",
+  "config": { "media": { "collection": "media", "maxFileSize": 8 } },
+  "blobs": { "a": "hello world" },
+  "users": ["alice"],
+  "steps": [
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": 413, "code": "upload_too_large" } }
+  ]
+}

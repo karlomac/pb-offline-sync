@@ -10,10 +10,16 @@ the frozen v1.0 contract and the source of truth; code follows it.
 
 ## Branches and environments
 
-- `main` is **production** (the live app). No staging merges, no feature PRs, no
-  history rewrites.
-- `staging` is the testbed mirror plus features under test. There is no planned
-  staging→main merge.
+- **`main` is production.** A live app runs from it. Do **not** merge `staging`
+  into `main`, do not target `main` with feature PRs, and do not force-push or
+  rewrite it. Promotion to production is a deliberate maintainer decision.
+- **`staging` is the testbed** and a mirror of production plus features under
+  test (media sync, auth signup gate). Feature/fix PRs target `staging`; it may
+  be deployed to a test environment only.
+- There is currently **no planned `staging → main` merge**. Do not assume a
+  release train, and do not describe testbed fixes as "live" or "in
+  production".
+- CI runs on both branches; tags/releases remain a maintainer action.
 
 ## Read before changing anything
 
@@ -23,8 +29,16 @@ the frozen v1.0 contract and the source of truth; code follows it.
 - `docs/threat-model.md` — security requirements.
 - `docs/test-scenarios.md` — the scenario catalog for both sides, with coverage
   status and the prioritised gaps.
-- `docs/media-sync-plan.md` — **proposal** for photo/video sync (not part of the
-  frozen protocol; a v1.1 spec change is required before implementing).
+- `docs/media-sync-plan.md` — photo/video sync. Shipped on `staging` as the
+  additive protocol v1.1 extension (`docs/protocol.md` §18); still under test,
+  not in production.
+- `docs/media-download-design.md` — proposal for downloading/storing media
+  on-device (offline playback). Not implemented; code freeze until the current
+  staging E2E and production validation finish.
+- `docs/e2e-replication-test-plan.md` — the end-to-end, media, auth, failure and
+  load plan; `e2e/bootstrap.sh` runs it autonomously.
+- `docs/pocketbase-upgrade.md` — how the PocketBase/Go pins work and the upgrade
+  runbook for maintainers and forks.
 
 ## Repository layout
 
@@ -53,7 +67,8 @@ packages you touched.
 ## Pinned versions
 
 - **PocketBase:** `v0.40.6` (verify a supported range before widening; check the
-  upstream changelog before using any API outside it).
+  upstream changelog before using any API outside it). Upgrade procedure:
+  `docs/pocketbase-upgrade.md`.
 - **Go:** 1.27.x (module `github.com/karlomac/pb-offline-sync/server`).
 - **Node:** 22.x.
 
@@ -86,3 +101,21 @@ The project name and Go module path are settled: `pb-offline-sync` and
 ## Highest-risk areas (review these manually)
 
 Conflict logic, ownership checks, and hook/transaction atomicity.
+
+## Bug tracking (audits, reviews, builds)
+
+A bug is not finished until it is tracked in this repository:
+
+1. **Open a GitHub issue** as soon as an audit, code review, CI run or build/test
+   failure identifies a bug or security finding. Describe severity, exact
+   location (`file:line`, endpoint or collection), impact, and the evidence or
+   reproduction. Group by audited change-set or bug class — not one issue per
+   commit.
+2. **When a fix lands, comment on that issue** with: what changed, the tests
+   that now cover it, the commit(s), and a link to the PR. Put `Fixes #<n>` in
+   the PR body so the issue closes on merge.
+3. Keep the trail in one place: the issue carries problem → resolution history;
+   the PR carries the code.
+
+This applies to security audits, review findings, CI failures, and any
+build-time error that required a code change.

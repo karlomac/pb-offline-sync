@@ -1,0 +1,21 @@
+{
+  "name": "media-upload-foreign-session-not-found",
+  "description": "Another user cannot resume or commit a session; foreign ids are indistinguishable from missing ones (§18.3, §14.5).",
+  "config": { "media": { "collection": "media" } },
+  "blobs": { "a": "hello world" },
+  "users": ["alice", "bob"],
+  "steps": [
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": "upload", "uploadId": "$string" } },
+    { "as": "alice",
+      "media": { "op": "upload", "blob": "a" },
+      "expect": { "status": 204 } },
+    { "as": "bob",
+      "media": { "op": "upload", "blob": "a" },
+      "expect": { "status": 404, "code": "upload_not_found" } },
+    { "as": "bob",
+      "media": { "op": "commit", "request": { "uploadId": "$uploadId" } },
+      "expect": { "status": 404, "code": "upload_not_found" } }
+  ]
+}

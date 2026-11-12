@@ -16,6 +16,15 @@ background engine reconciles it with PocketBase when connectivity returns.
 
 ---
 
+## Branches
+
+- **`main`** — production (a live app runs from it). Feature work is not merged
+  here directly.
+- **`staging`** — testbed: production plus the features under test (media sync,
+  auth signup gate). Use it for validation deployments; it is not production.
+
+---
+
 ## Contents
 
 - [What it does](#what-it-does)
@@ -136,13 +145,45 @@ field as a relation to an auth collection, or the server **refuses to start**
 | `SYNC_MAX_BODY_BYTES` | `1048576` | max push body size |
 | `SYNC_IDEMPOTENCY_RETENTION_DAYS` | `14` | idempotency-record retention |
 | `SYNC_CHANGELOG_RETENTION_DAYS` | `30` | change-log retention (server-side) |
-| `SYNC_PRUNE_CRON` | `0 3 * * *` | cron for retention pruning; empty disables |
+| `SYNC_PRUNE_CRON` | `0 3 * * *` | cron for retention pruning; `none` disables |
+| `SYNC_MEDIA_COLLECTION` | *(empty)* | media collection name; empty keeps media sync off |
+| `SYNC_MEDIA_MAX_FILE_BYTES` | `0` | max media file size (0 = unlimited; set it in production) |
+| `SYNC_MEDIA_PER_USER_QUOTA` | `0` | per-user media quota in bytes (0 = unlimited) |
+| `SYNC_MEDIA_MIME_ALLOWLIST` | `image/,video/,audio/` | exact MIME types or `type/` prefixes |
 
 The container image's entrypoint also understands `PB_ADMIN_EMAIL` /
 `PB_ADMIN_PASSWORD` (superuser bootstrap), `PB_DATA_DIR` (default
-`/pb/pb_data`; must stay under `/pb`), `PB_HTTP_ADDR` (default `0.0.0.0:8090`)
-and `PB_ENCRYPTION_KEY` (when set, PocketBase settings are encrypted at rest via
-`--encryptionEnv`).
+`/pb/pb_data`, must stay under `/pb`), `PB_HTTP_ADDR` (default
+`0.0.0.0:8090`) and `PB_ENCRYPTION_KEY` (when set, PocketBase settings such as
+SMTP/OAuth secrets are encrypted at rest via `--encryptionEnv`).
+
+### Signup gating (optional auth plugin)
+
+`server/authplugin` gates new-account signup, off unless `AUTH_SIGNUP_MODE` is
+set. It only gates **creation**; sign-in, OTP and admin flows are untouched.
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `AUTH_SIGNUP_MODE` | *(empty)* | `oauth` \| `password` \| `both`; empty disables the plugin |
+| `AUTH_COLLECTION` | `users` | auth collection to gate (validated at boot) |
+| `AUTH_TURNSTILE_SECRET` | — | Cloudflare Turnstile secret (required for `password`/`both`) |
+| `AUTH_TURNSTILE_HOSTNAMES` | *(empty)* | allowed Turnstile hostnames (comma-separated; recommended) |
+| `AUTH_TURNSTILE_VERIFY_URL` | Cloudflare siteverify | verifier URL; must be https (http only for loopback) |
+| `AUTH_ALLOWED_EMAIL_DOMAINS` | *(empty)* | allowlist, exact domain match (`@` optional) |
+| `AUTH_DISPOSABLE_DOMAINS` | *(empty)* | blocklist, exact domain **or subdomain** match |
+
+The server refuses to start when `AUTH_COLLECTION` is missing/not an auth
+collection (a renamed collection would otherwise silently disable the gate), or
+in `password`/`both` mode when the collection's **auth rule** does not require
+verification. Set it to `verified = true` so a Turnstile-gated account is
+unusable until the verification email is confirmed; the plugin sends that email
+on password signup. Disposable-domain blocking covers subdomains, so
+`x.mailinator.com` is blocked by `mailinator.com`.
+
+The Turnstile verifier is called over TLS, refuses redirects (so the secret can
+never be replayed to another host), and is bounded to 5 s / 1 MiB. Signup has no
+built-in rate limit: put `/api/collections/<auth>/records` behind PocketBase's
+rate limiter or a proxy limit.
 
 ### Option B — embed the plugin in your own PocketBase app
 
@@ -272,6 +313,61 @@ access through sync).
 
 File fields are **not** synced in v1: clients receive file field values on pull
 but will not push changes to them (`file_field_unsupported`).
+
+### Media sync (protocol §18)
+
+Media is **off** unless `SYNC_MEDIA_COLLECTION` is set. Media records are
+server-created and immutable; clients upload bytes through the media channel and
+reference the resulting record from ordinary relation fields.
+
+Provision the media collection *before* enabling it, either with
+`syncplugin.EnsureMediaCollection(app, "media", usersCollection.Id, maxFileSize,
+posterMaxBytes)` in a migration, or by hand with the fixed fields from
+`docs/protocol.md` §18.1. Three requirements are security-critical and are
+**validated at boot** (the server refuses to start otherwise):
+
+1. the `file` and `poster` file fields must be **Protected** — an unprotected
+   field is served by PocketBase to anyone with the URL, no auth (H-1);
+2. the collection needs owner-scoped **list/view** rules
+   (`owner = @request.auth.id`) or owners cannot download their own media
+   (with a nil rule only superusers can);
+3. **create/update/delete** rules must stay locked (`null`): the plugin rejects
+   media mutations on the sync path, but PocketBase's own record API is governed
+   by these rules, so an open write rule would bypass the immutability model
+   (M-2).
+
+`EnsureMediaCollection` sets all three and converges collections created by
+older versions.
+
+The env-configured binary schedules the maintenance jobs itself whenever
+`SYNC_MEDIA_COLLECTION` is set: `SweepMediaStaging` every 30 minutes and
+`MediaGC` nightly. If you embed the plugin in your own app instead, you must
+schedule them yourself — they are explicit (no goroutines in the library):
+
+```go
+app.Cron().MustAdd("media-sweep", "*/30 * * * *", func() {
+	_, _ = syncplugin.SweepMediaStaging(app, cfg, time.Now().UTC())
+})
+app.Cron().MustAdd("media-gc", "15 3 * * *", func() {
+	_, _ = syncplugin.MediaGC(app, cfg, time.Now().UTC())
+})
+```
+
+Set a finite `SYNC_MEDIA_MAX_FILE_BYTES` / `SYNC_MEDIA_PER_USER_QUOTA` in
+production: `0` means unlimited, which leaves disk exhaustion as the only
+stopping condition. Rate-limit `/api/sync/media/init` at the proxy or with
+PocketBase's rate limiter; each `init` allocates a staging directory.
+
+The MIME allowlist is **advisory**: the declared MIME is checked at `init`, but
+bytes are not sniffed. That is safe for XSS because PocketBase serves only
+images/audio/video/PDF inline and forces `Content-Disposition: attachment` plus
+a sandbox CSP for everything else — do not re-serve media from your own handler
+based on the declared `mime` field.
+
+`sync_meta` keeps one tombstone row per record ever created (by design, so
+deleted ids are never reused); `Prune` does not remove it. Plan storage for it,
+and note that `Prune` does remove change-log, idempotency and conflict-diagnostic
+rows on their retention schedules.
 
 ### Retention / pruning
 
@@ -603,6 +699,9 @@ Reads are plain local reads through the same adapter:
 const rows = await storage.transaction((tx) => tx.list("notes"));
 ```
 
+**Cursors are opaque.** Never parse, edit or construct them: they are the
+server's bookkeeping, and a hand-edited cursor can silently skip records.
+
 **Lifecycle:** call `engine.syncNow()` (or the convenience hooks
 `onForeground()` / `onConnectivity()` / `onNudge()`) whenever the app resumes,
 connectivity returns, or the nudge fires. Conflicts surfaced in `status()` come
@@ -616,7 +715,13 @@ platform-independent and run in the browser — the engine's only requirement is
 SQLite adapter exists), so for SvelteKit or React-on-web you provide one, e.g.
 over IndexedDB (Dexie, `idb`, …).
 
-Wiring is identical to the Expo example, minus `openExpoDriver`:
+Wiring is identical to the Expo example, minus `openExpoDriver`.
+
+> **Token storage:** the transport only reads what your `getToken` returns. If
+> you use `localStorage`, any script injected into the page can read a
+> long-lived token that survives reload. Prefer an in-memory token refreshed on
+> load, or an httpOnly cookie held by a server-side proxy. The engine never
+> persists the token itself.
 
 ```ts
 import { SyncEngine, type StorageAdapter, type Tx } from "@pb-offline-sync/core";
@@ -687,6 +792,22 @@ cd client/adapter-expo-sqlite  && pnpm install && pnpm run typecheck && pnpm tes
 Both sides validate the same `conformance/` fixtures; a green run on both means
 they agree with `docs/protocol.md`. The server also has a randomized
 multi-device convergence harness: `go test ./syncplugin/ -run Convergence -count=5`.
+
+### Full end-to-end run on a blank Ubuntu 22.04 VPS
+
+`e2e/bootstrap.sh` installs the pinned toolchain (Go 1.27, Node 22, pnpm, k6,
+sqlite3), builds the server, provisions a disposable schema, and runs the
+scenarios from [`docs/e2e-replication-test-plan.md`](docs/e2e-replication-test-plan.md):
+
+```bash
+git clone -b staging https://github.com/karlomac/pb-offline-sync.git
+cd pb-offline-sync
+sudo ./e2e/bootstrap.sh            # add --skip-install to reuse an existing toolchain
+```
+
+Artifacts (phase logs, k6 summary, server logs, versions) land in
+`/tmp/pb-e2e/artifacts/<timestamp>/`; the script exits non-zero if any phase
+fails. It binds loopback only and wipes its data dir afterwards.
 See `docs/test-scenarios.md` for the full scenario catalog and known gaps.
 
 ## Releases

@@ -1,0 +1,18 @@
+{
+  "name": "media-init-mime-not-allowed",
+  "description": "MIME types outside the allowlist (or on the always-deny list) are rejected at init (§18.2, §18.6).",
+  "config": { "media": { "collection": "media" } },
+  "blobs": { "a": "hello world" },
+  "users": ["alice", "bob"],
+  "steps": [
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "text/html", "filename": "evil.html" } },
+      "expect": { "status": 415, "code": "mime_not_allowed" } },
+    { "as": "bob",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/svg+xml", "filename": "evil.svg" } },
+      "expect": { "status": 415, "code": "mime_not_allowed" } },
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": "upload", "uploadId": "$string" } }
+  ]
+}

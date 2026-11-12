@@ -34,6 +34,19 @@ threats and how each is mitigated, and what must be tested.
 File content sync is a v1 non-goal. Clients receive file field values (filenames)
 on pull but MUST NOT send file fields on push (`file_field_unsupported`).
 
+## Media uploads (v1.1, protocol §18)
+
+The media channel moves untrusted bytes; the additional threats:
+
+| Threat | Mitigation | Where |
+|---|---|---|
+| Resuming/committing another user's session | Sessions carry the owner from the token; a foreign `uploadId` is `upload_not_found`, indistinguishable from a missing one | protocol §18.3 |
+| Stored XSS via upload | MIME allowlist; `text/html` and `image/svg+xml` always denied; serving keeps PocketBase's `nosniff`/disposition handling | protocol §18.6 |
+| Client-claimed integrity | `sha256` recomputed server-side at `commit`; mismatch → `hash_mismatch`; re-verification after download is host-side (deferred with download wiring) | protocol §18.4 |
+| Cross-user content-existence oracle | Dedup keyed per user `(owner, sha256)`, never global | protocol §18.1 |
+| Disk-fill via abandoned partials | Staging TTL sweep; per-user quota and max file size enforced at `init` before bytes move; `init` rate-limiting recommended | protocol §18.2, §18.6 |
+| Long-lived public URLs for private media | Downloads go through PocketBase file serving with short-lived file tokens | protocol §18.4 |
+
 ## Required tests
 
 - A **cross-user access suite**: forged owner, forged server fields, ID squatting,

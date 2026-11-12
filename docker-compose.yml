@@ -15,8 +15,38 @@ services:
         PB_VERSION: ${PB_VERSION:-}
     image: ghcr.io/karlomac/pb-offline-sync:latest
     restart: unless-stopped
-    env_file:
-      - .env
+    # Dokploy builds from the repo and injects variables, so there is no .env on
+    # the server: declare each key explicitly (audit L-6). Locally, `docker
+    # compose` reads the same names from .env automatically.
+    environment:
+      PB_ADMIN_EMAIL: ${PB_ADMIN_EMAIL:-}
+      PB_ADMIN_PASSWORD: ${PB_ADMIN_PASSWORD:-}
+      PB_DATA_DIR: ${PB_DATA_DIR:-/pb/pb_data}
+      PB_HTTP_ADDR: ${PB_HTTP_ADDR:-0.0.0.0:8090}
+      # Optional settings encryption (PocketBase --encryptionEnv).
+      PB_ENCRYPTION_KEY: ${PB_ENCRYPTION_KEY:-}
+      SYNC_COLLECTIONS: ${SYNC_COLLECTIONS:-}
+      SYNC_OWNER_FIELD: ${SYNC_OWNER_FIELD:-}
+      SYNC_CONFLICT: ${SYNC_CONFLICT:-}
+      SYNC_DELETE_POLICY: ${SYNC_DELETE_POLICY:-}
+      SYNC_MAX_BATCH: ${SYNC_MAX_BATCH:-}
+      SYNC_MAX_PAGE: ${SYNC_MAX_PAGE:-}
+      SYNC_DEFAULT_PAGE: ${SYNC_DEFAULT_PAGE:-}
+      SYNC_MAX_BODY_BYTES: ${SYNC_MAX_BODY_BYTES:-}
+      SYNC_IDEMPOTENCY_RETENTION_DAYS: ${SYNC_IDEMPOTENCY_RETENTION_DAYS:-}
+      SYNC_CHANGELOG_RETENTION_DAYS: ${SYNC_CHANGELOG_RETENTION_DAYS:-}
+      SYNC_PRUNE_CRON: ${SYNC_PRUNE_CRON:-}
+      SYNC_MEDIA_COLLECTION: ${SYNC_MEDIA_COLLECTION:-}
+      SYNC_MEDIA_MAX_FILE_BYTES: ${SYNC_MEDIA_MAX_FILE_BYTES:-}
+      SYNC_MEDIA_PER_USER_QUOTA: ${SYNC_MEDIA_PER_USER_QUOTA:-}
+      SYNC_MEDIA_MIME_ALLOWLIST: ${SYNC_MEDIA_MIME_ALLOWLIST:-}
+      AUTH_SIGNUP_MODE: ${AUTH_SIGNUP_MODE:-}
+      AUTH_COLLECTION: ${AUTH_COLLECTION:-}
+      AUTH_TURNSTILE_SECRET: ${AUTH_TURNSTILE_SECRET:-}
+      AUTH_TURNSTILE_HOSTNAMES: ${AUTH_TURNSTILE_HOSTNAMES:-}
+      AUTH_TURNSTILE_VERIFY_URL: ${AUTH_TURNSTILE_VERIFY_URL:-}
+      AUTH_ALLOWED_EMAIL_DOMAINS: ${AUTH_ALLOWED_EMAIL_DOMAINS:-}
+      AUTH_DISPOSABLE_DOMAINS: ${AUTH_DISPOSABLE_DOMAINS:-}
     # Dokploy's Traefik reaches the container over the internal network, so the
     # port is only *exposed*, never published to the host. Publishing it makes a
     # second deployment fail with:

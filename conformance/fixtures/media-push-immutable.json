@@ -1,0 +1,17 @@
+{
+  "name": "media-push-immutable",
+  "description": "Media records are immutable and server-created; push create/update/delete on the media collection is rejected (§18.1).",
+  "config": { "collections": { "notes": { "ownerField": "owner", "conflictPolicy": "serverWins", "deletePolicy": "deleteWins", "fields": [ { "name": "title", "type": "text", "writable": true } ] } }, "media": { "collection": "media" } },
+  "users": ["alice"],
+  "steps": [
+    { "as": "alice", "push": { "mutations": [
+      { "id": "m1", "collection": "media", "recordId": "mediarecord0001", "op": "create", "fields": { "sha256": "aaaabbbbccccddddaaaabbbbccccddddaaaabbbbccccddddaaaabbbbccccdddd", "size": 11 } }
+    ] }, "expect": { "results": [ { "id": "m1", "status": "rejected", "code": "media_immutable" } ] } },
+    { "as": "alice", "push": { "mutations": [
+      { "id": "m2", "collection": "media", "recordId": "mediarecord0001", "op": "update", "baseRev": 1, "fields": { "filename": "x" } }
+    ] }, "expect": { "results": [ { "id": "m2", "status": "rejected", "code": "media_immutable" } ] } },
+    { "as": "alice", "push": { "mutations": [
+      { "id": "m3", "collection": "media", "recordId": "mediarecord0001", "op": "delete", "baseRev": 1 }
+    ] }, "expect": { "results": [ { "id": "m3", "status": "rejected", "code": "media_immutable" } ] } }
+  ]
+}

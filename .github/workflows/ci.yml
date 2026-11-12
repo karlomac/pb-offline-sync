@@ -1,11 +1,12 @@
 name: CI
 
+# Least privilege: workflows that publish (release.yml) opt into more.
+permissions:
+  contents: read
+
 on:
   push:
   pull_request:
-
-permissions:
-  contents: read
 
 jobs:
   server:
@@ -37,7 +38,9 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - name: Vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        # Pinned scanner (supply chain: no floating @latest in CI).
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
         env:
           GOFLAGS: -mod=mod
 
@@ -65,7 +68,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
       - run: pnpm test
-      - run: pnpm audit --prod --audit-level=high
+      - name: Dependency audit (runtime deps)
+        run: pnpm audit --prod --audit-level=high
 
   # Compatibility canary: the pinned version above is authoritative. This job
   # runs the suite against the latest PocketBase to surface upcoming breakage

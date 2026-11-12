@@ -1,10 +1,10 @@
 # pb-offline-sync Protocol Specification
 
-**Protocol version:** 1 · **Status:** Frozen (v1.0) · **Companion to:** `pb-offline-sync-PDD.md`
+**Protocol version:** 1 · **Status:** Frozen (v1.0; v1.1 adds the additive media extension) · **Companion to:** `pb-offline-sync-PDD.md`
 
 This document is the source of truth for the wire protocol between a sync **client** (local database + outbox) and a sync **server** (PocketBase with the pb-offline-sync plugin). Server and client implementations MUST be able to interoperate using only this document and the fixtures in `conformance/`.
 
-The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are to be interpreted as in RFC 2119. This document is frozen at protocol **v1.0**; the former `[OPEN]` items are resolved in §17.
+The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are to be interpreted as in RFC 2119. This document was frozen at protocol **v1.0**; the former `[OPEN]` items are resolved in §17. **v1.1** adds media sync as a purely additive extension (§18); the wire version stays `1`.
 
 ---
 
@@ -514,7 +514,109 @@ Items formerly marked `[OPEN]` are resolved here. Decisions 17.1.4 and orphan it
 8. **Idempotency window vs. long offline periods:** clients SHOULD pull before pushing when their outbox is older than the advertised window (§9); no extra protocol mechanism in v1.
 9. **Dedicated nudge channel:** v1 reuses PocketBase collection subscriptions (§10); a dedicated SSE topic is roadmap.
 
-## 18. Changelog
+## 18. Media sync (v1.1, additive)
+
+Added in **v1.1** without a version bump: new endpoints under `/api/sync/media/`, new error codes, and an optional `media` object in `/info` are additive changes (§2). The header stays `X-Sync-Protocol: 1`; clients not using media are unaffected. Rationale and design background: `docs/media-sync-plan.md`.
+
+### 18.1 Model
+
+- A dedicated **synced collection** (default name `media`) holds one record per unique blob, with the fixed fields `owner` (owner field), `sha256` (text), `size` (number), `mime` (text), `filename` (text), `file` (file field: the bytes), and `poster` (file field, optional: client-generated JPEG so HEIC/RAW/video always have a thumbnail source). Both file fields MUST be **Protected** and the collection MUST carry an owner-scoped list/view rule (`owner = @request.auth.id`); otherwise PocketBase serves the bytes to anyone holding the URL (§18.6).
+- **Media records are immutable and server-created.** They are created only by the server at `commit`. Clients MUST NOT create, update, or delete media records via push; the server MUST reject such mutations with `rejected` / `media_immutable`. The collection's create/update/delete API rules MUST be locked (`null`) for the same reason — the plugin's push check does not cover PocketBase's own record API. Unreferenced media is removed by server-side GC (§13-style retention; not a wire concern).
+- Business records reference media with **ordinary relation fields**, synced by `push`/`pull` as today. File fields remain non-writable on push (§4.1). Relation values MUST reference records owned by the caller; a cross-owner target is `rejected` / `validation_failed` (§14.6).
+- The dedup key is **(owner, sha256)**: dedup scope is per user (§14.5 — a global index would leak a cross-user content-existence oracle).
+- The identity of the bytes is the content hash, not `rev`. `rev` orders the media *record* changes only.
+
+### 18.2 `POST /api/sync/media/init`
+
+Request:
+
+```json
+{ "collection": "media", "sha256": "<64 lowercase hex>", "size": 84213769,
+  "mime": "image/heic", "filename": "IMG_4821.heic" }
+```
+
+- `collection` MUST be the server's configured media collection, else `400` / `unsupported_media`.
+- `sha256` MUST match `^[0-9a-f]{64}$`; `size` MUST be a positive integer ≤ the advertised `media.maxFileSize`, else `413` / `upload_too_large`.
+- `mime` MUST pass the server's allowlist, else `415` / `mime_not_allowed`.
+- If the per-user quota would be exceeded, `403` / `quota_exceeded` — checked at `init`, before bytes move, counting committed bytes and active staged sessions; a dedup hit is checked first and takes precedence (it adds no bytes).
+
+Response `200`, either a dedup hit (no bytes transferred):
+
+```json
+{ "status": "exists", "mediaId": "abc123def456ghi", "rev": 1 }
+```
+
+or a resumable upload session:
+
+```json
+{ "status": "upload", "uploadId": "u_9f…", "chunkSize": 8388608, "expiresIn": 86400 }
+```
+
+- `uploadId` is an opaque token; `chunkSize` is the server's recommended chunk size in bytes; `expiresIn` is the session TTL in seconds. A session that expires or is aborted yields `410` / `upload_expired` and `404` / `upload_not_found` respectively on later use.
+
+### 18.3 Upload channel (resumable, tus 1.0 core)
+
+| Request | Meaning |
+|---|---|
+| `HEAD /api/sync/media/upload/{uploadId}` | `200` with `Upload-Offset: <n>` and `Upload-Length: <size>` headers — where to resume from. |
+| `PATCH /api/sync/media/upload/{uploadId}` | Headers `Upload-Offset: <n>` (MUST equal the current offset, else `400` / `invalid_request`) and `Content-Type: application/offset+octet-stream`. Appends the body at the current offset. Responds `204` with the new `Upload-Offset` header. |
+| `DELETE /api/sync/media/upload/{uploadId}` | `204`; aborts the session and discards staged bytes. |
+
+- All three require authentication and the `X-Sync-Protocol` header. An unknown **or foreign** `uploadId` is `404` / `upload_not_found` (no existence oracle, §14.5); this includes consumed sessions, so `DELETE` cannot destroy the stored idempotency result of §18.4.
+- A `PATCH` that would push the staged bytes past the declared `size` is `413` / `upload_too_large`.
+- Servers MUST stream chunks to staging storage and MUST NOT require the whole body in memory.
+
+### 18.4 `POST /api/sync/media/commit`
+
+Request: `{ "uploadId": "u_9f…", "posterUploadId": "u_aa…" }` (`posterUploadId` optional).
+
+Server behavior: verifies the staged size equals the declared `size` and recomputes `sha256` over the staged bytes (the client's hash is a claim, not proof) → mismatch is `400` / `hash_mismatch`. If the optional `posterUploadId` is given, its session must be a fully staged JPEG (≤ the advertised poster cap; otherwise `400` / `invalid_request`). Then, in one transaction, it creates the `media` record (owner from the token, file fields attached), so the change log is written atomically (§8.5).
+
+Response `200`:
+
+```json
+{ "status": "ok", "mediaId": "abc123def456ghi", "rev": 1,
+  "file": { "name": "IMG_4821.heic", "size": 84213769 } }
+```
+
+- **Idempotent:** if a media record for (owner, sha256) already exists — including a commit retry after a lost response — the server returns the existing record with the same response shape. A commit for an already-committed `uploadId` returns the stored original result.
+- Bytes are served through PocketBase's own file serving (`/api/files/{collection}/{recordId}/{file}[?thumb=…]`) with a short-lived file token; this protocol defines no download endpoint.
+
+### 18.5 Error codes
+
+New request-level codes (§12.1 semantics; bodies use `{status, code, message}`):
+
+| HTTP | `code` | Meaning |
+|---|---|---|
+| 400 | `unsupported_media` | `collection` is not the configured media collection. |
+| 400 | `hash_mismatch` | Committed bytes do not match the declared `sha256`. |
+| 403 | `quota_exceeded` | Per-user byte quota would be exceeded. |
+| 404 | `upload_not_found` | Unknown, foreign, or already-consumed `uploadId`. |
+| 404 | `media_not_found` | A referenced media record does not exist (reserved for future media-lookup endpoints). |
+| 410 | `upload_expired` | The upload session's TTL has passed. |
+| 413 | `upload_too_large` | Declared or staged size exceeds `media.maxFileSize`. |
+| 415 | `mime_not_allowed` | MIME type fails the server allowlist. |
+
+A new per-mutation code is registered: `media_immutable` under `rejected` (§12.2).
+
+### 18.6 `/info` addition and security requirements
+
+When media sync is configured, `/info` MAY include an additive `media` object:
+
+```json
+"media": { "collection": "media", "chunkSize": 8388608, "maxFileSize": 0,
+           "perUserQuota": 0, "posterMaxBytes": 8388608, "stagingTtlHours": 24 }
+```
+
+(`0` = unlimited; `maxFileSize`/`perUserQuota` are bytes.) Clients MUST respect these limits.
+
+Security (extends §14): upload sessions and media records are bound to the token's user — a session cannot be resumed or committed by another user; `sha256` is always recomputed server-side at commit; MIME allowlists MUST deny `text/html` and `image/svg+xml`; `init` SHOULD be rate-limited; abandoned staging MUST be swept by TTL so partial uploads cannot fill the disk; file tokens handed to clients MUST be short-lived.
+
+Operational requirements: the media file fields MUST be Protected and the collection's list/view rule owner-scoped (§18.1) — with a nil rule only superusers can read files, and with an unprotected field everyone can. Hosts MUST schedule `SweepMediaStaging` and `MediaGC` (both are explicit, like `Prune`); GC only deletes records unreferenced for the configured grace window. A stored `commit` result is retained for the staging TTL, so an idempotent retry after that window is answered by re-`init` dedup instead.
+
+## 19. Changelog
+
+- **v1.1** — Media sync added as a purely additive extension (§18): `init`/`commit` endpoints, a tus-1.0-core resumable upload channel, per-user content-hash dedup, the immutable server-created `media` collection (`media_immutable` rejection on push), new error codes, and an optional `media` object in `/info`. The protocol version header remains `1`; §16's "additive changes do not bump the version" rule applies.
 
 - **v1.0 (frozen)** — Gate 0 resolutions applied: `rev` storage in a `sync_meta` side table with retained tombstone revs (§17.1.1), ownership-only rules in v1 (§14.6, §17.1.2), snapshot+head-cursor initial sync confirmed (§7.3, §17.1.3), and hook transaction-scope resolved to the `*Execute` hooks with spike evidence (§8.5, §17.1.4). Former `[OPEN]` markers removed; non-wire items deferred to v0.2 (§17.2).
 - **Draft 0** — Initial draft: endpoints (`info`, `push`, `pull`), rev/baseRev concurrency, field-level merge, conflict policies, idempotency, snapshot initial sync, error registry, security requirements, conformance fixture format.

@@ -12,3 +12,4 @@ export * from "./interfaces";
 export * from "./outbox";
 export * from "./memory";
 export * from "./engine";
+export * from "./media";

@@ -91,6 +91,29 @@ fail, `expect` describes the error body instead of `results`/`changes`:
   "expect": { "status": 400, "code": "cursor_invalid" } }
 ```
 
+**Media** (protocol §18): one interaction with the media channel per step.
+
+```json
+{ "as": "alice",
+  "media": { "op": "upload", "blob": "a", "slice": [5, 11] },
+  "expect": { "status": 204 } }
+```
+
+- `op` is one of `init` | `upload` | `offset` | `commit` | `abort`.
+- `init`/`commit` carry `request` with the §18.2/§18.4 body. Bodies never
+  hardcode hashes or ids: sentinels `$sha:<blob>` (hex sha256 of a named blob),
+  `$size:<blob>` (its byte length), `$uploadId` and `$mediaId` (runner state)
+  are substituted by the runner.
+- `upload` sends the bytes of `blob` (optionally `slice: [from, to]`) at the
+  runner-tracked offset and expects the §18.3 status; `offset` is the HEAD
+  request, matched against the synthetic body
+  `{ "status": 200, "uploadOffset": n, "uploadLength": m }`; `abort` is DELETE.
+- Fixture `blobs` is a name → UTF-8 string map of the byte contents; `config`
+  gains an optional `media` block (`{ "collection": "media", "maxFileSize"?,
+  "perUserQuota"? }`).
+- The runner keeps one active session/offset/mediaId per fixture and injects
+  `"$mediaId"` into later push mutation fields (workflow MED-4 fixture).
+
 ## `expect` is a subset match
 
 - Only the properties listed in `expect` must match; anything unlisted

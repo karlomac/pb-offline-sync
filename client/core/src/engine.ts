@@ -21,6 +21,11 @@ import type {
   Tx,
 } from "./interfaces";
 
+/** Bounded retry/pagination guards so a hostile or buggy server cannot wedge a sync run (audit M-7). */
+const MAX_NO_PROGRESS = 3;
+const MAX_PULL_PAGES = 10_000;
+const MAX_RESYNCS = 3;
+
 export type EngineState = "idle" | "pushing" | "pulling" | "offline" | "error" | "backoff";
 
 export interface SyncStatus {
@@ -59,6 +64,7 @@ export class SyncEngine {
   private lastError: string | null = null;
   private inflight: Promise<void> | null = null;
   private retryAttempt = 0;
+  private resyncAttempt = 0;
 
   constructor(opts: EngineOptions) {
     this.storage = opts.storage;
@@ -167,8 +173,15 @@ export class SyncEngine {
       await this.recordSyncTime();
     } catch (err) {
       if (isCursorTooOld(err)) {
+        if (this.resyncAttempt >= MAX_RESYNCS) {
+          this.lastError = describe(err);
+          this.state = "error";
+          return;
+        }
+        this.resyncAttempt++;
         try {
           await this.resync();
+          this.resyncAttempt = 0;
           this.state = "idle";
           this.retryAttempt = 0;
           await this.recordSyncTime();
@@ -184,6 +197,7 @@ export class SyncEngine {
   }
 
   private async pushAll(): Promise<void> {
+    let noProgress = 0;
     for (;;) {
       const batch = await this.storage.transaction(async (tx) => {
         const b = await this.nextBatch(tx);
@@ -198,12 +212,27 @@ export class SyncEngine {
         throw new TransportError("empty push response");
       }
 
-      await this.storage.transaction(async (tx) => {
+      const applied = await this.storage.transaction(async (tx) => {
+        let matched = 0;
         for (const result of response.results) {
+          if (result == null || typeof result.id !== "string") continue;
           const entry = batch.find((e) => e.mutationId === result.id);
-          if (entry) await this.applyPushResult(tx, entry, result);
+          if (entry) {
+            matched++;
+            await this.applyPushResult(tx, entry, result);
+          }
         }
+        return matched;
       });
+      // Results that match no batch entry apply nothing: an identical batch
+      // would be pushed forever (M-7).
+      if (applied === 0) {
+        if (++noProgress >= MAX_NO_PROGRESS) {
+          throw new TransportError("push made no progress", { code: "invalid_response" });
+        }
+      } else {
+        noProgress = 0;
+      }
     }
   }
 
@@ -323,12 +352,25 @@ export class SyncEngine {
     const startedSnapshotFresh = cursor0 === null;
     let cursor = cursor0;
     let delivered: Set<string> | null = null;
+    let pages = 0;
     for (;;) {
       const page = await this.transport.pull(cursor, this.maxPage);
+      if (page == null || !Array.isArray(page.changes)) {
+        throw new TransportError("invalid pull response", { code: "invalid_response" });
+      }
       if (page.mode === "snapshot") delivered ??= new Set();
       await this.applyPage(page, delivered);
-      cursor = page.cursor;
       if (!page.hasMore) break;
+      // A non-advancing or missing cursor with hasMore=true would loop forever
+      // (M-7); a page count cap bounds any server that keeps advancing without
+      // ever finishing.
+      if (typeof page.cursor !== "string" || page.cursor === "" || page.cursor === cursor) {
+        throw new TransportError("pull cursor did not advance", { code: "invalid_response" });
+      }
+      cursor = page.cursor;
+      if (++pages > MAX_PULL_PAGES) {
+        throw new TransportError("pull page limit exceeded", { code: "invalid_response" });
+      }
     }
     if (delivered && startedSnapshotFresh) await this.cleanupSnapshot(delivered);
   }
@@ -337,6 +379,7 @@ export class SyncEngine {
   private async applyPage(page: PullResponse, delivered: Set<string> | null): Promise<void> {
     await this.storage.transaction(async (tx) => {
       for (const change of page.changes) {
+        if (change == null || typeof change.collection !== "string" || typeof change.recordId !== "string") continue;
         if (delivered) delivered.add(recordKey(change.collection, change.recordId));
         await this.applyChange(tx, change);
       }
@@ -347,6 +390,8 @@ export class SyncEngine {
 
   /** §11.3 apply-by-rev with rebase of pending edits. */
   private async applyChange(tx: Tx, change: Change): Promise<void> {
+    // rev is server-authoritative; a non-integer would corrupt ordering (M-8).
+    if (!Number.isSafeInteger(change.rev) || change.rev < 1) return;
     const local = await tx.get(change.collection, change.recordId);
     const localRev = local && local.rev > 0 ? local.rev : null;
     if (localRev !== null && change.rev <= localRev) return; // stale or duplicate
@@ -442,6 +487,9 @@ function isCursorTooOld(err: unknown): boolean {
 
 function isOffline(err: unknown): boolean {
   if (!(err instanceof TransportError)) return false;
+  // A malformed/hostile response is a protocol violation, not a network loss:
+  // reporting it as offline would retry it forever behind a friendly state.
+  if (err.code === "invalid_response") return false;
   const s = err.status;
   return s === undefined || s >= 500 || s === 429;
 }

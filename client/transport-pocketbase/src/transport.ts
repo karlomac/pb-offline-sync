@@ -8,7 +8,17 @@
  * with no status, which the engine treats as offline (§11.2).
  */
 import { TransportError } from "@pb-offline-sync/core";
-import type { Mutation, PullResponse, PushResponse, Transport } from "@pb-offline-sync/core";
+import type {
+  MediaCommitRequest,
+  MediaCommitResponse,
+  MediaInitRequest,
+  MediaInitResponse,
+  MediaTransport,
+  Mutation,
+  PullResponse,
+  PushResponse,
+  Transport,
+} from "@pb-offline-sync/core";
 import { sseNudgeSource } from "./nudge";
 import type { NudgeSource, SyncInfo, TokenProvider } from "./types";
 
@@ -29,7 +39,7 @@ export interface PocketBaseTransportOptions {
   nudge?: NudgeSource;
 }
 
-export class PocketBaseTransport implements Transport {
+export class PocketBaseTransport implements Transport, MediaTransport {
   private readonly origin: string;
   private readonly basePath: string;
   private readonly token: TokenProvider;
@@ -72,19 +82,69 @@ export class PocketBaseTransport implements Transport {
     return this.nudge.subscribe(onNudge);
   }
 
+  // ── media channel (§18) ────────────────────────────────────────────────
+
+  /** §18.2 init → dedup hit or a resumable session. */
+  async mediaInit(req: MediaInitRequest): Promise<MediaInitResponse> {
+    return (await this.readJson(await this.send("POST", "/media/init", req))) as MediaInitResponse;
+  }
+
+  /** §18.3 HEAD → the server's Upload-Offset (resume truth). */
+  async mediaOffset(uploadId: string): Promise<number> {
+    const res = await this.send("HEAD", `/media/upload/${encodeURIComponent(uploadId)}`);
+    return parseOffset(res, "Upload-Offset");
+  }
+
+  /** §18.3 PATCH → appends raw bytes at `offset` (tus core). */
+  async mediaAppend(uploadId: string, offset: number, chunk: Uint8Array): Promise<void> {
+    const res = await this.sendRaw("PATCH", this.mediaPath(uploadId), chunk, {
+      "Upload-Offset": String(offset),
+      "Content-Type": TUS_CONTENT_TYPE,
+    });
+    const got = parseOffset(res, "Upload-Offset");
+    if (got !== offset + chunk.byteLength) {
+      throw new TransportError(`server offset ${got} does not match offset ${offset} + ${chunk.byteLength}`, {
+        status: res.status,
+      });
+    }
+  }
+
+  /** §18.3 DELETE → discards staged bytes. */
+  async mediaAbort(uploadId: string): Promise<void> {
+    await this.send("DELETE", `/media/upload/${encodeURIComponent(uploadId)}`);
+  }
+
+  /** §18.4 commit → creates (or dedups) the media record. Idempotent. */
+  async mediaCommit(req: MediaCommitRequest): Promise<MediaCommitResponse> {
+    return (await this.readJson(await this.send("POST", "/media/commit", req))) as MediaCommitResponse;
+  }
+
+  private mediaPath(uploadId: string): string {
+    return `${this.origin}${this.basePath}/media/upload/${encodeURIComponent(uploadId)}`;
+  }
+
   private async send(method: string, path: string, body?: unknown): Promise<Response> {
+    return await this.sendRaw(method, `${this.origin}${this.basePath}${path}`, body === undefined ? undefined : JSON.stringify(body), {
+      "Content-Type": body === undefined ? undefined : "application/json",
+    });
+  }
+
+  private async sendRaw(
+    method: string,
+    url: string,
+    body: Uint8Array | string | ArrayBuffer | undefined,
+    extra: Record<string, string | undefined> = {},
+  ): Promise<Response> {
     const headers: Record<string, string> = { [PROTOCOL_HEADER]: String(PROTOCOL_VERSION) };
-    if (body !== undefined) headers["Content-Type"] = "application/json";
+    for (const [k, v] of Object.entries(extra)) {
+      if (v !== undefined) headers[k] = v;
+    }
     const token = await this.token.getToken();
     if (token) headers.Authorization = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
 
     let res: Response;
     try {
-      res = await this.doFetch(`${this.origin}${this.basePath}${path}`, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
+      res = await this.doFetch(url, { method, headers, body });
     } catch (err) {
       // Offline / DNS / TLS: no status so the engine treats it as offline (§11.2).
       throw new TransportError(`network error: ${err instanceof Error ? err.message : String(err)}`);
@@ -116,13 +176,31 @@ async function toTransportError(res: Response): Promise<TransportError> {
   }
   return new TransportError(message, {
     status: res.status,
-    code: code ?? defaultCode(res.status),
+    code: code ?? defaultCode(res),
     retryAfter: parseRetryAfter(res.headers?.get?.("Retry-After")),
   });
 }
 
 /** §12.1 status → code when the body carries no code. */
-function defaultCode(status: number): string {
+function defaultCode(res: Response): string {
+  // §18.5 media endpoints use a different code map per status — the generic
+  // fallbacks below (cursor_too_old, batch_too_large, …) would mislabel them.
+  const mediaPath = typeof res.url === "string" && res.url.includes("/api/sync/media/");
+  if (mediaPath) {
+    switch (res.status) {
+      case 403:
+        return "quota_exceeded";
+      case 404:
+        return "upload_not_found";
+      case 410:
+        return "upload_expired";
+      case 413:
+        return "upload_too_large";
+      case 415:
+        return "mime_not_allowed";
+    }
+  }
+  const status = res.status;
   switch (status) {
     case 401:
       return "unauthorized";
@@ -146,4 +224,19 @@ function parseRetryAfter(value: string | null | undefined): number | undefined {
   const date = Date.parse(value);
   if (Number.isNaN(date)) return undefined;
   return Math.max(0, Math.round((date - Date.now()) / 1000));
+}
+
+/** §18.3 tus header. */
+export const TUS_CONTENT_TYPE = "application/offset+octet-stream";
+
+/** Reads an integer tus response header; throwing when malformed/absent. */
+function parseOffset(res: Response, name: string): number {
+  const raw = res.headers?.get?.(name);
+  const n = Number(raw);
+  // Tus offsets are non-negative integers; a negative or fractional value must
+  // not become a resume position (audit M-8).
+  if (raw == null || !Number.isSafeInteger(n) || n < 0) {
+    throw new TransportError(`missing or malformed ${name} header`, { status: res.status });
+  }
+  return n;
 }

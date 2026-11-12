@@ -460,10 +460,17 @@ func TestResyncOn410AfterPrune(t *testing.T) {
 		t.Fatal("expected a cursor after the first sync")
 	}
 
-	// Age the whole log out, then confirm the old cursor is now rejected.
+	// Age the log explicitly, then confirm the old cursor is now rejected. A
+	// nanosecond retention races the millisecond-precision `created` column
+	// (issue #7): when the prune lands in the same millisecond as the writes,
+	// nothing is deleted and the cursor legitimately stays valid.
+	if _, err := env.app.DB().NewQuery(
+		`UPDATE sync_changes SET created = '2020-01-01 00:00:00.000Z'`).Execute(); err != nil {
+		t.Fatalf("age change log: %v", err)
+	}
 	if err := Prune(env.app, Config{
 		Collections:              map[string]CollectionConfig{"notes": {OwnerField: "owner"}},
-		ChangeLogRetention:       time.Nanosecond,
+		ChangeLogRetention:       time.Hour,
 		IdempotencyRetentionDays: 1,
 	}); err != nil {
 		t.Fatalf("Prune: %v", err)

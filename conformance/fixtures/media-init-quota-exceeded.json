@@ -1,0 +1,15 @@
+{
+  "name": "media-init-quota-exceeded",
+  "description": "A per-user quota is enforced at init, before bytes move (§18.2); a small file stays under it (§18.6).",
+  "config": { "media": { "collection": "media", "perUserQuota": 8 } },
+  "blobs": { "a": "hello world", "t": "abcd" },
+  "users": ["alice", "bob"],
+  "steps": [
+    { "as": "alice",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:a", "size": "$size:a", "mime": "image/png", "filename": "a.png" } },
+      "expect": { "status": 403, "code": "quota_exceeded" } },
+    { "as": "bob",
+      "media": { "op": "init", "request": { "collection": "media", "sha256": "$sha:t", "size": "$size:t", "mime": "image/png", "filename": "t.png" } },
+      "expect": { "status": "upload", "uploadId": "$string" } }
+  ]
+}

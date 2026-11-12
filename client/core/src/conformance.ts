@@ -25,6 +25,8 @@ export interface Step {
   as: string;
   push?: { mutations: Mutation[] };
   pull?: Record<string, unknown>;
+  /** §18 media-channel step; executed runner-side (server driver) or by client media fixtures. */
+  media?: { op: "init" | "upload" | "offset" | "commit" | "abort"; request?: unknown; blob?: string; slice?: number[] };
   expect: unknown;
 }
 
@@ -33,6 +35,8 @@ export interface Fixture {
   description: string;
   config: unknown;
   users: string[];
+  /** Named blob contents; "$sha:<name>"/"$size:<name>" sentinels in media steps refer to these. */
+  blobs?: Record<string, string>;
   steps: Step[];
 }
 
@@ -55,8 +59,36 @@ export function validateFixture(file: string, f: Fixture): string[] {
     if (!s.as || !users.has(s.as)) errors.push(`${ctx}: \`as\` must name a configured user`);
     const hasPush = s.push != null;
     const hasPull = s.pull != null;
-    if (hasPush === hasPull) errors.push(`${ctx}: exactly one of push/pull must be set`);
+    const hasMedia = s.media != null;
+    if (hasMedia ? hasPush || hasPull : hasPush === hasPull) {
+      errors.push(`${ctx}: exactly one of push/pull/media must be set`);
+    }
     if (s.expect == null) errors.push(`${ctx}: expect is required`);
+    if (hasMedia && s.media != null) {
+      const m = s.media;
+      if (!["init", "upload", "offset", "commit", "abort"].includes(m.op)) {
+        errors.push(`${ctx}: media.op must be init|upload|offset|commit|abort`);
+      }
+      if ((m.op === "init" || m.op === "commit") && (m.request == null || typeof m.request !== "object")) {
+        errors.push(`${ctx}: media ${m.op} requires request`);
+      }
+      if (m.op === "upload") {
+        if (!m.blob) {
+          errors.push(`${ctx}: media upload requires blob`);
+        } else if (f.blobs == null || !(m.blob in f.blobs)) {
+          errors.push(`${ctx}: media upload references unknown blob ${m.blob}`);
+        } else if (m.slice != null) {
+          if (m.slice.length !== 2 || m.slice.some((n) => !Number.isInteger(n))) {
+            errors.push(`${ctx}: media upload slice must be [from,to] integers`);
+          } else {
+            const len = new TextEncoder().encode(f.blobs[m.blob]).byteLength;
+            const [from, to] = m.slice;
+            if (from < 0 || to > len || from > to) errors.push(`${ctx}: media upload slice out of range for blob ${m.blob}`);
+          }
+        }
+      }
+      return;
+    }
     if (!hasPush || s.push == null) return;
     if (!Array.isArray(s.push.mutations) || s.push.mutations.length === 0) {
       errors.push(`${ctx}: push.mutations must be non-empty`);

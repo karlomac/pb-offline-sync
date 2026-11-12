@@ -4,6 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pocketbase/pocketbase/tests"
+	"github.com/pocketbase/pocketbase/tools/cron"
+
 	"github.com/karlomac/pb-offline-sync/server/syncplugin"
 )
 
@@ -89,5 +92,121 @@ func TestConfigFromEnvRejectsBadValues(t *testing.T) {
 		if _, _, err := configFromEnv(getter(env)); err == nil {
 			t.Errorf("%s=%q: expected an error", tc.key, tc.val)
 		}
+	}
+}
+
+func TestConfigFromEnvMediaDisabledByDefault(t *testing.T) {
+	cfg, _, err := configFromEnv(getter(map[string]string{"SYNC_COLLECTIONS": "notes"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Media != nil {
+		t.Fatalf("media must stay disabled without SYNC_MEDIA_COLLECTION: %+v", cfg.Media)
+	}
+}
+
+func TestConfigFromEnvMediaWiring(t *testing.T) {
+	cfg, enabled, err := configFromEnv(getter(map[string]string{
+		"SYNC_COLLECTIONS":         "notes",
+		"SYNC_MEDIA_COLLECTION":    "photos",
+		"SYNC_MEDIA_MAX_FILE_BYTES": "1048576",
+		"SYNC_MEDIA_PER_USER_QUOTA": "5242880",
+	}))
+	if err != nil || !enabled {
+		t.Fatalf("enabled=%v err=%v", enabled, err)
+	}
+	if cfg.Media == nil {
+		t.Fatal("media config not built")
+	}
+	if cfg.Media.Collection != "photos" || cfg.Media.MaxFileSize != 1048576 || cfg.Media.PerUserQuota != 5242880 {
+		t.Fatalf("media config: %+v", cfg.Media)
+	}
+	// The media collection is auto-registered as synced (§18.1).
+	if _, ok := cfg.Collections["photos"]; !ok {
+		t.Fatal("media collection not added to the synced set")
+	}
+
+	// Invalid numeric values fail fast instead of silently disabling a limit.
+	if _, _, err := configFromEnv(getter(map[string]string{
+		"SYNC_COLLECTIONS":      "notes",
+		"SYNC_MEDIA_COLLECTION": "photos",
+		"SYNC_MEDIA_MAX_FILE_BYTES": "lots",
+	})); err == nil {
+		t.Fatal("expected an error for a non-numeric media limit")
+	}
+}
+
+func TestPruneCronDefaultsAndExplicitDisable(t *testing.T) {
+	// Compose/Dokploy inject optional vars as empty strings: that must mean
+	// "default", not "disabled".
+	t.Setenv("SYNC_PRUNE_CRON", "")
+	if got := pruneCron(); got != "0 3 * * *" {
+		t.Fatalf("empty = %q, want the nightly default", got)
+	}
+	t.Setenv("SYNC_PRUNE_CRON", "OFF")
+	if got := pruneCron(); got != "" {
+		t.Fatalf("off = %q, want disabled", got)
+	}
+	t.Setenv("SYNC_PRUNE_CRON", "*/15 * * * *")
+	if got := pruneCron(); got != "*/15 * * * *" {
+		t.Fatalf("explicit cron = %q", got)
+	}
+}
+
+func cronIDs(t *testing.T, app interface{ Cron() *cron.Cron }) map[string]bool {
+	t.Helper()
+	ids := map[string]bool{}
+	for _, job := range app.Cron().Jobs() {
+		ids[job.Id()] = true
+	}
+	return ids
+}
+
+func TestRegisterCronSchedulesMaintenance(t *testing.T) {
+	mediaCfg := syncplugin.Config{
+		Collections: map[string]syncplugin.CollectionConfig{"media": {OwnerField: "owner"}},
+		Media:       &syncplugin.MediaConfig{Collection: "media"},
+	}
+
+	// PocketBase registers its own jobs on a test app, so assert by id.
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatalf("NewTestApp: %v", err)
+	}
+	defer app.Cleanup()
+	t.Setenv("SYNC_PRUNE_CRON", "")
+	registerCron(app, mediaCfg)
+	ids := cronIDs(t, app)
+	for _, want := range []string{"pb-sync-prune", "pb-media-sweep", "pb-media-gc"} {
+		if !ids[want] {
+			t.Fatalf("cron job %q not scheduled; got %v", want, ids)
+		}
+	}
+
+	// Without media, only pruning is registered.
+	app2, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatalf("NewTestApp: %v", err)
+	}
+	defer app2.Cleanup()
+	registerCron(app2, syncplugin.Config{
+		Collections: map[string]syncplugin.CollectionConfig{"notes": {OwnerField: "owner"}},
+	})
+	ids = cronIDs(t, app2)
+	if !ids["pb-sync-prune"] || ids["pb-media-sweep"] || ids["pb-media-gc"] {
+		t.Fatalf("unexpected jobs without media: %v", ids)
+	}
+
+	// SYNC_PRUNE_CRON=none disables pruning but keeps the media jobs.
+	app3, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatalf("NewTestApp: %v", err)
+	}
+	defer app3.Cleanup()
+	t.Setenv("SYNC_PRUNE_CRON", "none")
+	registerCron(app3, mediaCfg)
+	ids = cronIDs(t, app3)
+	if ids["pb-sync-prune"] || !ids["pb-media-sweep"] || !ids["pb-media-gc"] {
+		t.Fatalf("unexpected jobs with pruning disabled: %v", ids)
 	}
 }

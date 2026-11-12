@@ -17,7 +17,28 @@
 //	SYNC_IDEMPOTENCY_RETENTION_DAYS  idempotency retention (default 14)
 //	SYNC_CHANGELOG_RETENTION_DAYS    change-log retention (default 30)
 //	SYNC_PRUNE_CRON                  cron expr for retention pruning
-//	                                 (default "0 3 * * *"; empty disables)
+//	                                 (default "0 3 * * *"; "none" disables)
+//	SYNC_MEDIA_COLLECTION            media collection name; empty disables media
+//	                                 (see docs/protocol.md §18 for the required
+//	                                 Protected file fields and owner-scoped rules)
+//	SYNC_MEDIA_MAX_FILE_BYTES        media max file size in bytes (default 0 = unlimited)
+//	SYNC_MEDIA_PER_USER_QUOTA        media per-user quota in bytes (default 0 = unlimited)
+//	SYNC_MEDIA_MIME_ALLOWLIST        comma-separated exact MIME types or "type/" prefixes
+//	                                 (default: image/, video/, audio/; text/html and
+//	                                 image/svg+xml are always denied)
+//
+// When media is enabled the binary schedules its maintenance jobs: staging is
+// swept every 30 minutes and unreferenced media is garbage-collected nightly
+// (the library itself never starts goroutines — see SweepMediaStaging/MediaGC).
+//
+//	                                           Auth plugin (off unless AUTH_SIGNUP_MODE is set):
+//		AUTH_SIGNUP_MODE                 oauth|password|both
+//		AUTH_COLLECTION                  auth collection name (default "users")
+//		AUTH_TURNSTILE_SECRET            Turnstile secret (required for password/both)
+//		AUTH_TURNSTILE_HOSTNAMES         comma-separated allowed Turnstile hostnames
+//		AUTH_TURNSTILE_VERIFY_URL        siteverify URL (default Cloudflare)
+//		AUTH_ALLOWED_EMAIL_DOMAINS       comma-separated allowed email domains
+//		AUTH_DISPOSABLE_DOMAINS          comma-separated blocked disposable domains
 //
 // Every collection named in SYNC_COLLECTIONS must exist and have the owner
 // field as a relation to an auth collection, or the server refuses to start
@@ -33,7 +54,9 @@ import (
 	"time"
 
 	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/karlomac/pb-offline-sync/server/authplugin"
 	"github.com/karlomac/pb-offline-sync/server/syncplugin"
 )
 
@@ -47,15 +70,16 @@ func main() {
 
 	if enabled {
 		syncplugin.MustRegister(app, cfg)
+		registerCron(app, cfg)
+	}
 
-		// The plugin never prunes on its own; schedule it here so the
-		// configured retention is actually applied.
-		if expr := pruneCron(); expr != "" {
-			app.Cron().MustAdd("pb-sync-prune", expr, func() {
-				if err := syncplugin.Prune(app, cfg); err != nil {
-					app.Logger().Error("pb-offline-sync: prune failed", "error", err)
-				}
-			})
+	authCfg, authEnabled, err := authplugin.ConfigFromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("pb-offline-sync auth: %v", err)
+	}
+	if authEnabled {
+		if err := authplugin.Register(app, authCfg); err != nil {
+			log.Fatalf("pb-offline-sync auth: %v", err)
 		}
 	}
 
@@ -64,13 +88,50 @@ func main() {
 	}
 }
 
-// pruneCron returns the configured cron expression, defaulting to nightly and
-// treating an explicit empty value as "do not schedule".
-func pruneCron() string {
-	if v, ok := os.LookupEnv("SYNC_PRUNE_CRON"); ok {
-		return strings.TrimSpace(v)
+const (
+	mediaSweepCron = "*/30 * * * *"
+	mediaGCCron    = "15 3 * * *"
+)
+
+// registerCron wires the plugin's maintenance work. Prune, the staging sweep
+// and MediaGC are all explicit in the library (no goroutines), so a
+// deployment that never schedules them silently leaks disk: expired upload
+// sessions accumulate and unreferenced media is never freed.
+func registerCron(app core.App, cfg syncplugin.Config) {
+	if expr := pruneCron(); expr != "" {
+		app.Cron().MustAdd("pb-sync-prune", expr, func() {
+			if err := syncplugin.Prune(app, cfg); err != nil {
+				app.Logger().Error("pb-offline-sync: prune failed", "error", err)
+			}
+		})
 	}
-	return "0 3 * * *"
+	if cfg.Media == nil {
+		return
+	}
+	app.Cron().MustAdd("pb-media-sweep", mediaSweepCron, func() {
+		if _, err := syncplugin.SweepMediaStaging(app, cfg, time.Now().UTC()); err != nil {
+			app.Logger().Error("pb-offline-sync: media staging sweep failed", "error", err)
+		}
+	})
+	app.Cron().MustAdd("pb-media-gc", mediaGCCron, func() {
+		if _, err := syncplugin.MediaGC(app, cfg, time.Now().UTC()); err != nil {
+			app.Logger().Error("pb-offline-sync: media GC failed", "error", err)
+		}
+	})
+}
+
+// pruneCron returns the configured cron expression, defaulting to nightly.
+// Empty means "unset" (compose/Dokploy inject optional variables as empty
+// strings), so disabling is explicit: "none" or "off".
+func pruneCron() string {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("SYNC_PRUNE_CRON"))); v {
+	case "":
+		return "0 3 * * *"
+	case "none", "off":
+		return ""
+	default:
+		return v
+	}
 }
 
 // configFromEnv builds the plugin config from environment variables. The second
@@ -131,7 +192,42 @@ func configFromEnv(get func(string) string) (syncplugin.Config, bool, error) {
 		cfg.ChangeLogRetention = time.Duration(days) * 24 * time.Hour
 	}
 
+	if cfg.Media, err = mediaFromEnv(get, cfg.Collections); err != nil {
+		return syncplugin.Config{}, false, err
+	}
+
 	return cfg, true, nil
+}
+
+// mediaFromEnv builds the optional media config. An empty media collection name
+// disables the feature; the collection itself is provisioned by the operator
+// (or the host app via syncplugin.EnsureMediaCollection) and validated at boot.
+func mediaFromEnv(get func(string) string, collections map[string]syncplugin.CollectionConfig) (*syncplugin.MediaConfig, error) {
+	name := strings.TrimSpace(get("SYNC_MEDIA_COLLECTION"))
+	if name == "" {
+		return nil, nil
+	}
+	mc := &syncplugin.MediaConfig{
+		Collection:    name,
+		MimeAllowlist: splitList(get("SYNC_MEDIA_MIME_ALLOWLIST")),
+	}
+	maxFileSize, err := envInt64(get, "SYNC_MEDIA_MAX_FILE_BYTES")
+	if err != nil {
+		return nil, err
+	}
+	quota, err := envInt64(get, "SYNC_MEDIA_PER_USER_QUOTA")
+	if err != nil {
+		return nil, err
+	}
+	mc.MaxFileSize = maxFileSize
+	mc.PerUserQuota = quota
+
+	// The media collection is a synced collection (§18.1); main.go owns the
+	// defaults wiring, so register it when the operator has not listed it.
+	if _, ok := collections[name]; !ok {
+		collections[name] = syncplugin.CollectionConfig{OwnerField: "owner"}
+	}
+	return mc, nil
 }
 
 func splitList(v string) []string {
