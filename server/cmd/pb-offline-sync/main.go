@@ -56,6 +56,7 @@ import (
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 
+	"github.com/karlomac/pb-offline-sync/server/adminaccess"
 	"github.com/karlomac/pb-offline-sync/server/authplugin"
 	"github.com/karlomac/pb-offline-sync/server/syncplugin"
 )
@@ -82,6 +83,16 @@ func main() {
 			log.Fatalf("pb-offline-sync auth: %v", err)
 		}
 	}
+
+	adminCfg, err := adminaccess.ParseConfig(
+		os.Getenv("ADMIN_ALLOW_IPS"),
+		envBool(os.Getenv("ADMIN_ALLOW_ALL")),
+		os.Getenv("ADMIN_ALLOW_UNTIL"),
+	)
+	if err != nil {
+		log.Fatalf("pb-offline-sync admin access: %v", err)
+	}
+	adminaccess.Register(app, adminCfg)
 
 	if err := app.Start(); err != nil {
 		log.Fatal(err)
@@ -118,6 +129,12 @@ func registerCron(app core.App, cfg syncplugin.Config) {
 			app.Logger().Error("pb-offline-sync: media GC failed", "error", err)
 		}
 	})
+}
+
+// envBool parses an optional boolean env value ("", "false", "0" are false).
+func envBool(v string) bool {
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	return err == nil && b
 }
 
 // pruneCron returns the configured cron expression, defaulting to nightly.

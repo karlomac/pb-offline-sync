@@ -10,7 +10,7 @@ import (
 )
 
 // envVarRe finds the env variable names the server actually reads.
-var envVarRe = regexp.MustCompile(`\b((?:SYNC|AUTH|PB)_[A-Z0-9_]*[A-Z0-9])\b`)
+var envVarRe = regexp.MustCompile(`\b((?:ADMIN|SYNC|AUTH|PB)_[A-Z0-9_]*[A-Z0-9])\b`)
 
 // TestConfigSurfaceCoveredEverywhere guards the deployment contract: the
 // variables the binary reads must be forwarded by docker-compose.yml (Dokploy
