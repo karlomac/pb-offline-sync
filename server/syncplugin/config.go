@@ -15,7 +15,7 @@ const ProtocolVersion = 1
 // (§16). Release builds override it:
 //
 //	-ldflags "-X github.com/karlomac/pb-offline-sync/server/syncplugin.PluginVersion=0.2.0"
-var PluginVersion = "0.2.0"
+var PluginVersion = "0.2.1"
 
 // ConflictPolicy selects the server action for overlapping fields on a stale base (§8.3).
 type ConflictPolicy string

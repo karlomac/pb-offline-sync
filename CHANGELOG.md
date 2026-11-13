@@ -10,6 +10,21 @@ changes.
 
 _Nothing yet._
 
+## [0.2.1] - 2026-11-13
+
+### Added
+
+- Optional **admin access guard**: `ADMIN_ALLOW_IPS` (IPs/CIDRs),
+  `ADMIN_ALLOW_ALL` (emergency bypass) and `ADMIN_ALLOW_UNTIL` (RFC 3339
+  temporary window) restrict `/_` and the superuser-only API groups
+  (`_superusers`, `settings`, `backups`, `logs`, `crons`). Disabled by default;
+  invalid values fail boot; after a temporary window with no allowlist the admin
+  surfaces fail closed.
+
+### Changed
+
+- `PluginVersion` bumped to `0.2.1` (reported by `/info`).
+
 ## [0.2.0] - 2026-11-12
 
 ### Added
