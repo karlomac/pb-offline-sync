@@ -157,6 +157,27 @@ The container image's entrypoint also understands `PB_ADMIN_EMAIL` /
 `0.0.0.0:8090`) and `PB_ENCRYPTION_KEY` (when set, PocketBase settings such as
 SMTP/OAuth secrets are encrypted at rest via `--encryptionEnv`).
 
+### Admin access guard (optional)
+
+PocketBase always serves the admin UI at `/_` and has no switch to disable it.
+When the app is exposed publicly, restrict that surface to known source
+addresses (empty = no restriction, the historical behaviour):
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `ADMIN_ALLOW_IPS` | *(empty)* | CSV of IPs/CIDRs allowed to reach `/_` and the superuser-only API groups (`_superusers`, `settings`, `backups`, `logs`, `crons`) |
+| `ADMIN_ALLOW_ALL` | `false` | emergency bypass for every IP; logged loudly at boot |
+| `ADMIN_ALLOW_UNTIL` | *(empty)* | RFC 3339 instant for a temporary bypass; after it only `ADMIN_ALLOW_IPS` apply — with no allowlist the admin surfaces stay closed (fail closed) |
+
+Denied requests receive `403 Admin access is restricted.`; the guard logs the
+source IP and path only. Behind a reverse proxy, configure PocketBase's trusted
+proxy headers (`Settings → Trusted proxy`) so `RealIP()` sees the client rather
+than Traefik. If trusted-proxy headers cannot be configured, prefer
+`ADMIN_ALLOW_UNTIL` (time-boxed) or the proxy's own IP allowlist instead of
+`ADMIN_ALLOW_IPS`. This is defense-in-depth — keep TLS, strong superuser
+credentials, rate limits and a private bucket. For remote E2E runs, include the
+runner's public IP in `ADMIN_ALLOW_IPS` (provisioning uses the superuser API).
+
 ### Signup gating (optional auth plugin)
 
 `server/authplugin` gates new-account signup, off unless `AUTH_SIGNUP_MODE` is
