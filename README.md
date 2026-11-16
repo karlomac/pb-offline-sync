@@ -8,20 +8,26 @@ conformance suite.
 The app reads and writes **only local data** and stays fully usable offline; a
 background engine reconciles it with PocketBase when connectivity returns.
 
-> **Status: pre-release.** The project is **`pb-offline-sync`** and the Go module
-> is `github.com/karlomac/pb-offline-sync/server`. Nothing is published yet (not on
-> npm or the Go module proxy), so install from source (below); the npm scope
-> `@pb-offline-sync/*` is reserved for the client packages. Do not imply official
-> PocketBase endorsement.
+> **Status: v0.2.1 — the production line (pre-1.0).** The wire protocol is frozen
+> at **v1.0**, with media sync as an **additive v1.1 extension**
+> (`docs/protocol.md` §18); the `X-Sync-Protocol` header stays `1`.
+>
+> **Published:** container images on GHCR (`ghcr.io/karlomac/pb-offline-sync`),
+> cross-compiled binaries + a GitHub Release per tag, and the `server/v*` Go
+> module tags. **Not published:** the client npm packages —
+> `@pb-offline-sync/*` are `0.0.0` and `private`, so use them from source (below).
+> The Go module path is `github.com/karlomac/pb-offline-sync/server`. Do not imply
+> official PocketBase endorsement.
 
 ---
 
 ## Branches
 
-- **`main`** — production (a live app runs from it). Feature work is not merged
-  here directly.
-- **`staging`** — testbed: production plus the features under test (media sync,
-  auth signup gate). Use it for validation deployments; it is not production.
+- **`main`** — production. A live app runs from it; no feature PRs, no force-push
+  or history rewrites. Promotion is a deliberate maintainer decision.
+- **`staging`** — testbed: a mirror of production where features under test are
+  merged first. Deploy it only to a test environment. At the time of writing it
+  is in sync with `main` (both at `v0.2.1`).
 
 ---
 
@@ -59,6 +65,12 @@ background engine reconciles it with PocketBase when connectivity returns.
   updates arrive quickly without polling. The nudge payload is never
   authoritative — correctness only depends on `pull`.
 
+- **Media (optional, v0.2.0+)**: server-created, immutable media records with a
+  resumable upload channel, per-user content-hash dedup, quotas and refcount GC.
+  Off unless `SYNC_MEDIA_COLLECTION` is set.
+- **Optional hardening**: a Turnstile-gated signup plugin (`server/authplugin`)
+  and an IP allowlist for the admin surfaces (`server/adminaccess`).
+
 ## How it works
 
 ```
@@ -76,23 +88,33 @@ Client app ─► local DB (SQLite)                  Server: PocketBase + plugin
   dependency). It keeps an outbox, coalesces pending edits, applies incoming
   changes by `rev`, rebases pending edits over pulls, and does a full resync when
   the server says the cursor is too old.
+- **Media bytes** travel on `/api/sync/media/*` (`init` → resumable upload →
+  `commit`); the resulting media record then syncs like any other record, and
+  business records reference it through ordinary relation fields.
 
-The wire contract is frozen at protocol **v1.0**: `docs/protocol.md` is the
-source of truth. See `docs/architecture.md` for the server design and the
-resolved decisions, and `docs/threat-model.md` for the security model.
+The wire contract is frozen at protocol **v1.0**; media sync is an **additive
+v1.1 extension** (`docs/protocol.md` §18), so `X-Sync-Protocol` remains `1`.
+`docs/protocol.md` is the source of truth. See `docs/architecture.md` for the
+server design and the resolved decisions, and `docs/threat-model.md` for the
+security model.
 
 ## Repository layout
 
 ```
-docs/protocol.md          the frozen v1.0 wire contract (source of truth)
+docs/protocol.md          frozen v1.0 wire contract + additive v1.1 media (§18)
 docs/test-scenarios.md    scenario catalog for both sides + coverage gaps
-docs/media-sync-plan.md   design proposal for photo/video (media) sync
+docs/e2e-replication-test-plan.md   the executable end-to-end / load plan
+docs/media-sync-plan.md   media design proposal (implemented in v0.2.0)
+docs/media-download-design.md       proposal: downloading/storing media on-device
+docs/pocketbase-upgrade.md          PocketBase/Go pin policy and upgrade runbook
 docs/release-plan.md      versioning scheme + the tag-driven release pipeline
+docs/security-audit-2026-10-29.md    latest audit and per-finding remediation
 .github/workflows/        CI and release automation
 conformance/              language-neutral JSON fixtures both sides must pass
-server/                   Go module: the PocketBase plugin (package syncplugin)
+server/                   Go module: syncplugin, authplugin, adminaccess, cmd
 server/cmd/pb-offline-sync/   the default PocketBase build (env-configured)
-Dockerfile                production image for the bundled build
+e2e/                      bootstrap.sh + live/harness suites (local and --remote)
+Dockerfile                production image (digest-pinned base images)
 docker-entrypoint.sh      container entrypoint: admin bootstrap + serve
 docker-compose.yml        local / Dokploy Compose deployment
 .env.example              deployment env template (never commit the real .env)
@@ -106,10 +128,15 @@ examples/expo-notes/      example app (roadmap)
 
 ## Part 1 — Server: the PocketBase build
 
-The server is PocketBase with the sync plugin compiled in. This repo ships that
-app at `server/cmd/pb-offline-sync`, configured entirely by environment
-variables, so **one binary and one image serve every app** — it is the default
-PocketBase build.
+The server is PocketBase (pinned **v0.40.6**) with the sync plugin compiled in,
+plus the optional signup-gate and admin-guard modules. This repo ships that app
+at `server/cmd/pb-offline-sync`, configured entirely by environment variables, so
+**one binary and one image serve every app** — it is the default PocketBase
+build.
+
+Prerequisites: **Go 1.27.x** to build (no cgo — PocketBase's SQLite driver is pure
+Go, so cross-compiling and static binaries work). Node 22 + pnpm are only needed
+for the client packages.
 
 ### Option A — use the bundled build (recommended)
 
@@ -424,9 +451,10 @@ docs if a step differs.)
 ### 1. Use the shipped `Dockerfile`
 
 This repo already contains a production `Dockerfile` at the root. It builds
-`server/cmd/pb-offline-sync`, runs as a non-root user, and exposes a
-`/api/health` check — there is nothing to write. Point Dokploy at the **repo
-root**.
+`server/cmd/pb-offline-sync` from digest-pinned base images, runs the server as a
+non-root user (the entrypoint starts as root only to fix mount ownership), and
+exposes a `/api/health` check — there is nothing to write. Point Dokploy at the
+**repo root**.
 
 ```bash
 # optional local sanity check (plain Docker on a host, not Dokploy)
@@ -448,9 +476,17 @@ This build follows the usual PocketBase-on-Dokploy `.env` (template:
 | Key | Meaning |
 |---|---|
 | `PB_ADMIN_EMAIL` / `PB_ADMIN_PASSWORD` | superuser created/refreshed idempotently on every boot |
+| `PB_DATA_PATH` | absolute host path bind-mounted to `/pb/pb_data` (compose interpolation only) |
+| `PB_DATA_DIR`, `PB_HTTP_ADDR` | container data dir (default `/pb/pb_data`, must stay under `/pb`) and listen address |
+| `PB_ENCRYPTION_KEY` | when set, encrypts PocketBase settings at rest via `--encryptionEnv` |
 | `PB_VERSION` | optional build-time PocketBase version. **Blank means the pinned version** (`v0.40.6`), not "latest" — see the note below |
-| `PB_DATA_PATH` | absolute host path bind-mounted to `/pb/pb_data` |
-| `SYNC_COLLECTIONS`, `SYNC_*` | sync plugin config (Part 1) |
+| `SYNC_COLLECTIONS`, `SYNC_*` | sync + media config (the two tables in Part 1) |
+| `ADMIN_ALLOW_IPS` / `ADMIN_ALLOW_ALL` / `ADMIN_ALLOW_UNTIL` | optional admin access guard (Part 1) |
+| `AUTH_SIGNUP_MODE` and the other `AUTH_*` | optional signup gate (Part 1) |
+
+The shipped `docker-compose.yml` declares every one of these explicitly, because
+Dokploy does not mount an `env_file`; locally, `docker compose` reads the same
+names from `.env`.
 
 > `PB_VERSION` deliberately differs from the upstream "blank = latest" habit.
 > The plugin's change-log/hook behaviour is only verified against the pinned
@@ -509,10 +545,12 @@ synced collection(s) from Part 2. Health probe: `GET /api/health`.
 
 ### Docker Compose alternative
 
-A ready `docker-compose.yml` is included at the repo root — set
-`SYNC_COLLECTIONS` there and run:
+A ready `docker-compose.yml` is included at the repo root. It declares every
+variable explicitly (Dokploy has no `env_file`); locally, `docker compose` fills
+them from `.env`:
 
 ```bash
+cp .env.example .env    # then edit
 docker compose up -d --build
 ```
 
@@ -829,45 +867,64 @@ sudo ./e2e/bootstrap.sh            # add --skip-install to reuse an existing too
 Artifacts (phase logs, k6 summary, server logs, versions) land in
 `/tmp/pb-e2e/artifacts/<timestamp>/`; the script exits non-zero if any phase
 fails. It binds loopback only and wipes its data dir afterwards.
+
+Against an already-deployed instance (no local build), use `--remote`:
+
+```bash
+sudo ./e2e/bootstrap.sh --remote https://your-domain --no-provision
+# add --skip-auth when no Turnstile verifier is reachable from the server
+```
+
+Admin credentials come from `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD`, and a
+remote run needs the runner's IP in `ADMIN_ALLOW_IPS` (provisioning uses the
+superuser API). CI additionally runs `govulncheck` and `pnpm audit --prod`.
 See `docs/test-scenarios.md` for the full scenario catalog and known gaps.
 
 ## Releases
 
-Tag-driven, fully automated — see `docs/release-plan.md`:
+Tag-driven, fully automated — see `docs/release-plan.md`. Latest published:
+**`v0.2.1`** (2026-11-13).
 
 ```bash
-# move the [Unreleased] section in CHANGELOG.md to:  ## [0.1.0] - 2026-10-22
-git commit -am "Release v0.1.0" && git push
-git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
+# 1. Move the [Unreleased] entries into a versioned section, e.g.
+#      ## [0.2.2] - 2026-11-16
+git commit -am "Release v0.2.2" && git push
+git tag -a v0.2.2 -m v0.2.2 && git push origin v0.2.2
 ```
 
 The release workflow refuses to run without a matching changelog section, re-runs
 the Go suite, then publishes the GHCR image (`ghcr.io/karlomac/pb-offline-sync`),
 cross-compiled binaries with checksums, a GitHub Release, and the `server/vX.Y.Z`
-tag that `go get` requires. Stable tags also move `latest`; prereleases
-(`v0.2.0-rc.1`) do not.
+tag that `go get` requires. Stable tags also move `X.Y` and `latest`;
+prereleases (e.g. `v0.3.0-rc.1`) do not.
 
 ## Compatibility
 
 | | Supported |
 |---|---|
-| PocketBase | `v0.40.6` (pinned; range not yet widened) |
-| Go | 1.27.x |
+| PocketBase | `v0.40.6` (pinned; policy in `docs/pocketbase-upgrade.md`) |
+| Go | 1.27.x (`go 1.27.2` in `server/go.mod`) |
 | Node | 22.x |
-| Protocol | 1 |
+| Protocol | `1` — v1.0 frozen, plus the additive v1.1 media extension |
+| Media | v1.1; off unless `SYNC_MEDIA_COLLECTION` is set |
 
-## Non-goals (v0.1)
+## Non-goals
 
-Shared/multi-user records, partial/filtered sync, file **content** sync,
-operation mutations (counters), CRDTs, server-side merge hooks,
-CouchDB-protocol compatibility, running PocketBase on-device. Full list and
-rationale in `docs/pb-offline-sync-PDD.md` §3.
+Shared/multi-user records, partial/filtered sync, operation mutations (counters),
+CRDTs, server-side merge hooks, CouchDB-protocol compatibility, running
+PocketBase on-device. File **content** sync is no longer a non-goal — it ships
+since v0.2.0 through the media extension (Part 2). Full list and rationale in
+`docs/pb-offline-sync-PDD.md` §3.
 
 ## Roadmap
 
-M0 contract + fixtures + scaffold · M1–M3 server · M4–M5 client · M6 convergence
-harness (all landed) → **M7 example app + v0.1 release**. See
-`docs/pb-offline-sync-PDD.md` §13.
+Landed: M0 contract + fixtures · M1–M3 server · M4–M5 client · M6 convergence
+harness · **v0.2.x**: media sync (protocol v1.1), optional signup gate and admin
+guard, end-to-end and load tooling.
+
+Outstanding: the **M7 example app**, media download / on-device storage
+(`docs/media-download-design.md`, proposal), and publishing the client packages.
+See `docs/pb-offline-sync-PDD.md` §13.
 
 ## Contributing
 
